@@ -392,7 +392,7 @@ curl -X POST http://127.0.0.1:3000/api/functions/search \
 
 ### 5.3.3 `GET /api/functions/:name/doc` — 查函数文档
 
-返回函数的短文本 + SE37 长文档 + 各参数描述（内部调用 `RFC_READ_TEXT`，文本对象 `FUNC`/ID `u`）。
+返回函数的短文本 + SE37 长文档 + 各参数描述（内部调用 `DOCU_GET_WITH_RFC`，文档对象 `OBJECT=函数名`/`ID=FU`/`TYP=E`）。
 
 ```bash
 curl 'http://127.0.0.1:3000/api/functions/BAPI_USER_GET_DETAIL/doc?lang=ZH'
@@ -414,7 +414,7 @@ curl 'http://127.0.0.1:3000/api/functions/BAPI_USER_GET_DETAIL/doc?lang=ZH'
 
 > 并非所有函数都有 SE37 长文档。无文档时 `long_text` 为空，`warning` 字段提示原因，不报错。
 
-> ⚠️ **长文档依赖 `RFC_READ_TEXT`**：少数精简/定制 SAP 系统可能未启用 `RFC_READ_TEXT`（非 remote-enabled）。此时 `long_text` 为空并在 `warning` 提示，但 `short_text` 和 `parameter_docs` 仍可用（来自 C API 参数描述，不依赖 RFC_READ_TEXT）。参数描述对 AI 理解如何传参通常已足够。
+> ⚠️ **长文档依赖 `DOCU_GET_WITH_RFC`**：该函数在多数 SAP 系统可用（组 SDOC）。若个别系统未启用，`long_text` 为空并在 `warning` 提示，但 `short_text` 和 `parameter_docs` 仍可用（来自 C API 参数描述，不依赖该函数）。参数描述对 AI 理解如何传参通常已足够。
 
 ### 5.3.4 `GET /api/ddic/type/:name` — 查 DDIC 结构/表字段
 
