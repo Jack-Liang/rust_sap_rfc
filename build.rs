@@ -17,11 +17,11 @@ fn main() {
     //   - linux-aarch64    同上 ARM64
     //   - darwin-x86_64    libsapnwrfc.dylib
     //   - darwin-aarch64    同上 Apple Silicon
-    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     // CARGO_CFG_TARGET_OS 对 macOS 返回 "macos"，但项目目录约定用 "darwin"
-    let os = if os == "macos" { "darwin" } else { &os };
-    let target_dir = format!("{}-{}", os, arch);
+    let os_dir = if target_os == "macos" { "darwin" } else { &target_os };
+    let target_dir = format!("{}-{}", os_dir, arch);
 
     let lib_dir = sdk_dir.join("lib").join(&target_dir);
 
@@ -63,9 +63,9 @@ fn main() {
     // 没有 RfcOpenConnection 等真实符号）时，链接器会因 undefined symbol 报错。
     // 允许未定义符号在运行时解析（用户挂载真实 SDK 后即可正常调用）。
     // 真实 SDK 存在时符号会被正常解析，此选项无副作用。
-    if os == "linux" {
+    if target_os == "linux" {
         println!("cargo:rustc-link-arg=-Wl,--unresolved-symbols=ignore-all");
-    } else if os == "macos" {
+    } else if target_os == "macos" {
         println!("cargo:rustc-link-arg=-Wl,-undefined,dynamic_lookup");
     }
 
