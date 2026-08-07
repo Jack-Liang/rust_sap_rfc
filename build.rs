@@ -57,6 +57,16 @@ fn main() {
     // 链接 SAP RFC 动态库（Windows: sapnwrfc.dll, Linux: libsapnwrfc.so）
     println!("cargo:rustc-link-lib=dylib=sapnwrfc");
 
+    // CI stub 构建兼容：当 libsapnwrfc.so/.dylib 是空占位库（只含 stub 符号，
+    // 没有 RfcOpenConnection 等真实符号）时，链接器会因 undefined symbol 报错。
+    // 允许未定义符号在运行时解析（用户挂载真实 SDK 后即可正常调用）。
+    // 真实 SDK 存在时符号会被正常解析，此选项无副作用。
+    if os == "linux" {
+        println!("cargo:rustc-link-arg=-Wl,--unresolved-symbols=ignore-all");
+    } else if os == "macos" {
+        println!("cargo:rustc-link-arg=-Wl,-undefined,dynamic_lookup");
+    }
+
     println!("cargo:warning=使用 SAP NWRFC SDK: {}", target_dir);
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=SAP_SDK_DIR");
