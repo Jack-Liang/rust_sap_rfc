@@ -189,4 +189,10 @@ Write-Host ""
 # 6. 启动
 Write-Host "=== 检查通过，启动服务 ===" -ForegroundColor Cyan
 Write-Host ""
+
+# SAP SDK 的 ICU DLL 通过运行时动态加载，需把 SDK 目录加入 PATH。
+# Windows DLL 搜索默认查 exe 同目录，但 SDK 在 nwrfcsdk\lib\windows-x86_64\ 子目录。
+$sdkLibPath = (Resolve-Path "nwrfcsdk\lib\windows-x86_64").Path
+$env:PATH = "$sdkLibPath;$env:PATH"
+
 cargo run --release

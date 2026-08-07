@@ -138,6 +138,28 @@ if [ "$SDK_OK" = "0" ]; then
 fi
 echo ""
 
+# 3e. macOS：自动修复 SDK dylib 的 install name + 重签
+#     SAP 官方 SDK 的 dylib install name 是 @loader_path/xxx（写死），
+#     导致 rpath 机制无效、运行时找不到库（dyld: Library not loaded）。
+#     改成 @rpath/xxx 让链接器用二进制嵌入的 rpath 自动定位。
+#     改 install name 会破坏原有代码签名，需重新 ad-hoc 签名，否则被 SIGKILL。
+#     仅 macOS 需要；Linux 用 rpath/LD_LIBRARY_PATH，Windows 用默认 DLL 搜索。
+if [ "$OS" = "darwin" ] && [ -d "$SDK_SUBDIR" ]; then
+    for dylib in "$SDK_SUBDIR"/*.dylib; do
+        [ -e "$dylib" ] || continue
+        # 读当前 install name（otool -D 第二行）
+        CUR_ID=$(otool -D "$dylib" 2>/dev/null | tail -1)
+        BASE=$(basename "$dylib")
+        if [[ "$CUR_ID" != "@rpath/$BASE" ]]; then
+            echo "macOS：修复 $BASE 的 install name（@loader_path → @rpath）..."
+            install_name_tool -id "@rpath/$BASE" "$dylib" 2>/dev/null
+            # 重签（ad-hoc），否则签名失效的库加载时被系统 SIGKILL
+            codesign --force --sign - "$dylib" 2>/dev/null
+            ok "$BASE install name 已修复并重签"
+        fi
+    done
+fi
+
 # 4. .env 配置文件
 if [ ! -f ".env" ]; then
     if [ -f ".env.example" ]; then
@@ -185,4 +207,15 @@ echo ""
 # 6. 启动
 echo "=== 检查通过，启动服务 ==="
 echo ""
+
+# SAP SDK 的 ICU 库通过 dlopen 运行时加载（非 Mach-O 链接依赖），
+# rpath 管不到 dlopen，必须设环境变量指向 SDK 目录。
+# 用绝对路径，避免工作目录差异。
+SDK_LIB_ABS="$PWD/$SDK_SUBDIR"
+if [ "$OS" = "darwin" ]; then
+    export DYLD_LIBRARY_PATH="$SDK_LIB_ABS:${DYLD_LIBRARY_PATH:-}"
+elif [ "$OS" = "linux" ]; then
+    export LD_LIBRARY_PATH="$SDK_LIB_ABS:${LD_LIBRARY_PATH:-}"
+fi
+
 exec cargo run --release
