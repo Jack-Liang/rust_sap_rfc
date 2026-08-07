@@ -91,6 +91,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # Windows：激活 MSVC 开发环境，把 lib.exe / link.exe 加入 PATH。
+      # lib.exe 不会默认在 PATH 里，必须先激活（vsdevcmd）才能在 stub 步骤调用。
+      - name: Set up MSVC dev environment (Windows only)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       # 安装 Linux aarch64 交叉编译工具链（gcc + linker）
       - name: Install aarch64 cross-toolchain (Linux only)
         if: matrix.cross_compile == true
@@ -152,8 +158,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $stub = "nwrfcsdk\lib\${{ matrix.platform_dir }}"
           New-Item -ItemType Directory -Force -Path $stub | Out-Null
-          # 从 .def 生成 stub 导入库；lib.exe 在 VS 的 MSVC 工具链里，
-          # windows-latest runner 自带，已通过 vcvars 加入 PATH。
+          # 从 .def 生成 stub 导入库；lib.exe 由上一步 msvc-dev-cmd 加入 PATH。
           lib /def:sapnwrfc.def /machine:x64 /out:"$stub\${{ matrix.lib_name }}"
           Get-ChildItem $stub
 
