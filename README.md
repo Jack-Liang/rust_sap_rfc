@@ -6,6 +6,7 @@
 - **技术栈**：Rust（标准库 FFI 直连 `sapnwrfc.dll`）+ axum + tokio + serde
 - **零 SDK 依赖客户端**：调用方只要会发 HTTP POST
 - **通用接口**：一个端点 `/api/rfc` 描述任意 BAPI，无需为每个 BAPI 写代码
+- **面向 AI**：5 个元数据端点（搜函数/查接口/查文档/查数据字典），Agent 能自服务探索。给 AI 的操作指南见 [`AGENTS.md`](./AGENTS.md)
 
 ---
 
@@ -329,6 +330,137 @@ HTTP 服务监听 addr="0.0.0.0:3000"
 > ⚠️ **当前版本的限制**：`table_outputs` 与 `struct_outputs` 的字段值统一按字符串读取，即使 SAP 侧类型是 INT/FLOAT/BCD/二进制。需要在调用方保留数值/二进制精度时，可改用 `BAPI_TRANSACTION_COMMIT` 等带结构化输入/输出的 BAPI，或自行用 SAP GUI/SE37 二次处理。
 
 未读取的字段（如没传 `table_outputs`）在响应中对应键**不出现**（`tables` 为空对象）。
+
+---
+
+## 5.3 面向 AI 的元数据 API
+
+除通用 `POST /api/rfc` 外，本服务提供 5 个元数据查询端点，让 AI/Agent 能**自服务地**发现可用函数、理解参数结构、查数据字典、读文档，从而自主决定「调什么、怎么传参」。
+
+典型 AI 工作流：**搜索函数 → 查接口 → 查文档 → 调用**。
+
+> 这组端点混合使用了两种技术：能高效拿到的（参数描述、DDIC 字段类型）走 SAP NWRFC SDK 的 C API；搜索/深层语义/长文档走 ABAP 标准 RFC（`RFC_FUNCTION_SEARCH`、`DDIF_FIELDINFO_GET`、`RFC_READ_TEXT`）。
+
+### 5.3.1 `GET /api/functions/:name` — 查函数完整接口
+
+返回某函数的全部参数：名称、类型、方向、长度、是否可选、默认值、描述文本，以及结构体/表参数的嵌套字段定义。
+
+```bash
+curl http://127.0.0.1:3000/api/functions/BAPI_USER_GET_DETAIL
+```
+
+响应：
+```json
+{
+  "name": "BAPI_USER_GET_DETAIL",
+  "params": [
+    {"name":"USERNAME","type":"CHAR","direction":"IMPORT","length":12,"optional":false,"description":"用户名称"},
+    {"name":"ADDRESS","type":"STRUCTURE","direction":"EXPORT","optional":true,"description":"地址数据",
+     "fields":[
+       {"name":"FIRSTNAME","type":"CHAR","length":35},
+       {"name":"LASTNAME","type":"CHAR","length":35}
+     ]}
+  ]
+}
+```
+
+### 5.3.2 `POST /api/functions/search` — 搜索函数模块
+
+按名字通配符搜索可远程调用的函数模块（内部调用 ABAP RFC `RFC_FUNCTION_SEARCH`）。
+
+```bash
+curl -X POST http://127.0.0.1:3000/api/functions/search \
+  -H "Content-Type: application/json" \
+  -d '{"pattern":"BAPI_USER_*","max_results":10}'
+```
+
+| 字段 | 必填 | 默认 | 说明 |
+|---|:---:|---|---|
+| `pattern` | ❌ | `*` | 函数名通配符，如 `BAPI_USER_*` |
+| `group` | ❌ | 空 | 函数组过滤 |
+| `max_results` | ❌ | `50` | 最多返回条数 |
+
+响应：
+```json
+{
+  "pattern":"BAPI_USER_*","count":2,
+  "functions":[
+    {"name":"BAPI_USER_GET_DETAIL","group":"SU","description":"读取用户数据"},
+    {"name":"BAPI_USER_GETLIST","group":"SU","description":"查询用户列表"}
+  ]
+}
+```
+
+### 5.3.3 `GET /api/functions/:name/doc` — 查函数文档
+
+返回函数的短文本 + SE37 长文档 + 各参数描述（内部调用 `DOCU_GET`，文档对象 `OBJECT=函数名`/`ID=FU`）。
+
+```bash
+curl 'http://127.0.0.1:3000/api/functions/BAPI_USER_GET_DETAIL/doc?lang=ZH'
+```
+
+| 查询参数 | 默认 | 说明 |
+|---|---|---|
+| `lang` | `SAP_LANG` 环境变量（回退 `EN`） | 文档语言，如 `ZH`/`EN` |
+
+响应：
+```json
+{
+  "name":"BAPI_USER_GET_DETAIL",
+  "short_text":"读取用户主数据",
+  "long_text":"<完整 SE37 函数文档>",
+  "parameter_docs":[{"name":"USERNAME","text":"用户名称"}]
+}
+```
+
+> 并非所有函数都有 SE37 长文档。无文档时 `long_text` 为空，`warning` 字段提示原因，不报错。
+
+> ⚠️ **长文档依赖 `DOCU_GET`**：该函数在多数 SAP 系统可用（组 SDOC）。若个别系统未启用，`long_text` 为空并在 `warning` 提示，但 `short_text` 和 `parameter_docs` 仍可用（来自 C API 参数描述，不依赖该函数）。参数描述对 AI 理解如何传参通常已足够。
+
+### 5.3.4 `GET /api/ddic/type/:name` — 查 DDIC 结构/表字段
+
+给定表名/结构名（如 `MARA`、`BAPIRETURN`），返回所有字段定义（内部用 C API `RfcGetTypeDesc`，高效）。
+
+```bash
+curl http://127.0.0.1:3000/api/ddic/type/BAPIRET2
+```
+
+> ⚠️ **透明表 vs 结构**：此端点对 DDIC **结构**（如 `BAPIRET2`、`BAPIRETURN`）普遍可用；对**透明表**（如 `MARA`）是否支持取决于目标 SAP 系统的 DDIC 配置——部分系统会对透明表返回 `NOT_FOUND`。透明表若不可用，改用端点④的 `DDIF_FIELDINFO_GET`（支持更广），或直接调 `POST /api/rfc` 用 `RFC_FUNCTION_SEARCH` 间接探查。
+
+响应：
+```json
+{
+  "name":"MARA",
+  "fields":[
+    {"name":"MATNR","type":"CHAR","length":18,"description":"物料号"},
+    {"name":"MTART","type":"CHAR","length":4,"description":"物料类型"}
+  ]
+}
+```
+
+### 5.3.5 `GET /api/ddic/field/:table/:field` — 查字段语义元数据
+
+查单个字段的深层语义：数据元素、域、检查表、文本标签、固定值（内部调用 `DDIF_FIELDINFO_GET`）。
+
+```bash
+curl 'http://127.0.0.1:3000/api/ddic/field/MARA/MTART?lang=ZH'
+```
+
+响应：
+```json
+{
+  "table":"MARA","field":"MTART",
+  "data_element":"MTART","domain":"MTART",
+  "description":"物料类型",
+  "medium_label":"物料类型",
+  "fixed_values":[
+    {"value":"FERT","text":"成品"},
+    {"value":"HALB","text":"半成品"}
+  ]
+}
+```
+
+> `fixed_values`（域的固定值范围）对 AI 理解状态码/类型字段的合法取值特别有用——AI 调用 BAPI 时可据此填正确的枚举值。
 
 ---
 

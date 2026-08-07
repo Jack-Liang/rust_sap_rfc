@@ -1,6 +1,7 @@
 mod api;
 mod config;
 mod connection;
+mod discovery;
 mod error;
 mod executor;
 mod ffi;

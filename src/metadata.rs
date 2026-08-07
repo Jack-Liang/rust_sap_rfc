@@ -1,25 +1,46 @@
-//! 函数元数据缓存：首次调用某函数时拉取其参数描述，后续复用。
+//! 函数与 DDIC 类型元数据缓存：首次查询时拉取描述，后续复用。
 //!
 //! 目的：
 //! 1. 让 REST 调用方不必手填 string_outputs 的 max_len——服务端用 SAP 真实字段长度填充。
 //! 2. 输出读取时按字段真实类型（INT/FLOAT/BCD/CHAR...）自动选择对应 RfcGetXxx，
 //!    保留数值/二进制语义。
+//! 3. 面向 AI 的元数据端点复用本缓存的函数接口/DDIC 字段查询。
 //!
 //! 缓存设计：只存 Rust 化的纯数据（不含 SAP 句柄），保证可跨线程共享。
-//! 表参数的字段信息在拉取时一次性递归解析好。
+//! 表/结构体参数的字段信息在拉取时一次性递归解析好。
 
 use crate::connection::{get_field_infos, RfcConnection};
 use crate::error::RfcError;
+use crate::ffi::{RFCTYPE_STRUCTURE, RFCTYPE_TABLE};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-/// 单个字段的元数据
+/// 嵌套结构体递归深度上限，防止 ABAP 深层自引用导致栈溢出。
+const MAX_RECURSION_DEPTH: usize = 5;
+
+/// 单个字段的元数据（精简版，用于执行期类型派发）
 #[derive(Debug, Clone, Copy)]
 pub struct FieldMeta {
     /// 字符长度（ucLength/2，对 CHAR/NUM/DATE/TIME 有意义）
     pub char_length: usize,
     /// RFCTYPE_* 常量值（见 ffi.rs）
     pub type_: i32,
+}
+
+/// DDIC 类型单个字段的元数据（完整版，含描述，面向 AI 端点）
+#[derive(Debug, Clone)]
+pub struct TypeFieldMeta {
+    pub name: String,
+    /// RFCTYPE_* 常量值
+    pub type_: i32,
+    /// 字符长度
+    pub char_length: usize,
+    /// 小数位（BCD/FLOAT）
+    pub decimals: u32,
+    /// 参数/字段描述文本（parameterText，可能为空）
+    pub description: String,
+    /// 若为结构体/表，递归解析的子字段（None 表示标量或达深度上限）
+    pub sub_fields: Option<Vec<TypeFieldMeta>>,
 }
 
 /// 单个函数的元数据（纯数据，无裸指针，可跨线程共享）
@@ -31,11 +52,54 @@ pub struct FuncMetadata {
     pub tables: HashMap<String, HashMap<String, FieldMeta>>,
 }
 
-/// 全局元数据缓存：函数名 -> 元数据
-static METADATA_CACHE: OnceLock<Mutex<HashMap<String, FuncMetadata>>> = OnceLock::new();
+/// 函数元数据缓存：函数名 -> 元数据
+static FUNC_CACHE: OnceLock<Mutex<HashMap<String, FuncMetadata>>> = OnceLock::new();
+/// DDIC 类型字段缓存：类型名 -> 字段列表
+static TYPE_CACHE: OnceLock<Mutex<HashMap<String, Vec<TypeFieldMeta>>>> = OnceLock::new();
 
-fn cache() -> &'static Mutex<HashMap<String, FuncMetadata>> {
-    METADATA_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn func_cache() -> &'static Mutex<HashMap<String, FuncMetadata>> {
+    FUNC_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn type_cache() -> &'static Mutex<HashMap<String, Vec<TypeFieldMeta>>> {
+    TYPE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 把 type_desc_handle 递归解析成 TypeFieldMeta 列表。
+/// SAFETY: type_handle 必须是有效的 DDIC 类型描述符句柄。
+unsafe fn resolve_fields_recursive(
+    type_handle: crate::ffi::RFC_TYPE_DESC_HANDLE,
+    depth: usize,
+) -> Result<Vec<TypeFieldMeta>, RfcError> {
+    let fields = get_field_infos(type_handle)?;
+    let mut out = Vec::with_capacity(fields.len());
+    for f in fields {
+        // 仅 STRUCTURE/TABLE 类型且未达深度上限时递归下钻
+        let sub_fields = if depth < MAX_RECURSION_DEPTH
+            && (f.type_ == RFCTYPE_TABLE || f.type_ == RFCTYPE_STRUCTURE)
+        {
+            if let Some(sub_handle) = f.type_desc_handle {
+                // SAFETY: sub_handle 来自刚解析的有效字段元数据
+                match unsafe { resolve_fields_recursive(sub_handle, depth + 1) } {
+                    Ok(sub) if !sub.is_empty() => Some(sub),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        out.push(TypeFieldMeta {
+            name: f.name.clone(),
+            type_: f.type_,
+            char_length: f.char_length,
+            decimals: f.decimals,
+            description: f.parameter_text.clone(),
+            sub_fields,
+        });
+    }
+    Ok(out)
 }
 
 /// 拉取并组装某函数的完整元数据（含表字段类型递归解析）。
@@ -50,7 +114,7 @@ fn fetch_metadata(conn: &RfcConnection, func_name: &str) -> Result<FuncMetadata,
         };
         // 表参数和结构体参数：递归读其字段元数据
         // （表和结构体的行类型都用 type_desc_handle 描述，处理方式相同）
-        if p.type_ == crate::ffi::RFCTYPE_TABLE || p.type_ == crate::ffi::RFCTYPE_STRUCTURE {
+        if p.type_ == RFCTYPE_TABLE || p.type_ == RFCTYPE_STRUCTURE {
             if let Some(type_handle) = p.type_desc_handle {
                 // SAFETY: type_handle 来自刚拉取的有效元数据，连接仍有效
                 let fields = unsafe { get_field_infos(type_handle) }?;
@@ -79,7 +143,7 @@ fn fetch_metadata(conn: &RfcConnection, func_name: &str) -> Result<FuncMetadata,
 pub fn get_metadata(conn: &RfcConnection, func_name: &str) -> Result<FuncMetadata, RfcError> {
     // 先查缓存（快路径）
     {
-        let map = cache().lock().map_err(|e| RfcError {
+        let map = func_cache().lock().map_err(|e| RfcError {
             code: -1,
             message: format!("元数据缓存锁被毒化: {}", e),
             key: String::new(),
@@ -91,7 +155,7 @@ pub fn get_metadata(conn: &RfcConnection, func_name: &str) -> Result<FuncMetadat
 
     // 未命中：从 SAP 拉取
     let meta = fetch_metadata(conn, func_name)?;
-    let mut map = cache().lock().map_err(|e| RfcError {
+    let mut map = func_cache().lock().map_err(|e| RfcError {
         code: -1,
         message: format!("元数据缓存锁被毒化: {}", e),
         key: String::new(),
@@ -120,4 +184,39 @@ pub fn table_field_metas(
 ) -> Option<HashMap<String, FieldMeta>> {
     let meta = get_metadata(conn, func_name).ok()?;
     meta.tables.get(&table_param.to_uppercase()).cloned()
+}
+
+/// 获取某 DDIC 类型（结构/表，如 MARA、BAPIRETURN）的字段元数据。
+/// 命中缓存直接返回；未命中则用 RfcGetTypeDesc 拉取并递归解析后缓存。
+/// 与函数元数据不同，这里返回完整的 TypeFieldMeta（含描述/小数位/嵌套子字段）。
+pub fn get_type_fields(
+    conn: &RfcConnection,
+    type_name: &str,
+) -> Result<Vec<TypeFieldMeta>, RfcError> {
+    let upper = type_name.to_uppercase();
+    // 先查缓存（快路径）
+    {
+        let map = type_cache().lock().map_err(|e| RfcError {
+            code: -1,
+            message: format!("类型缓存锁被毒化: {}", e),
+            key: String::new(),
+        })?;
+        if let Some(fields) = map.get(&upper) {
+            return Ok(fields.clone());
+        }
+    }
+
+    // 未命中：用 RfcGetTypeDesc 取类型描述符，递归解析字段
+    let type_handle = conn.get_type_desc(&upper)?;
+    // SAFETY: type_handle 来自刚获取的有效类型描述符，连接仍有效
+    let fields = unsafe { resolve_fields_recursive(type_handle, 0) }?;
+
+    let mut map = type_cache().lock().map_err(|e| RfcError {
+        code: -1,
+        message: format!("类型缓存锁被毒化: {}", e),
+        key: String::new(),
+    })?;
+    map.insert(upper.clone(), fields.clone());
+    tracing::debug!(r#type = %upper, fields = fields.len(), "DDIC 类型字段已缓存");
+    Ok(fields)
 }

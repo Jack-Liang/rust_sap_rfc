@@ -50,6 +50,8 @@ EXPORTS
     ; 结构体字段元数据
     RfcGetFieldDescByIndex
     RfcGetFieldCount
+    ; DDIC 类型描述符（按精确名查结构/表，用于查数据字典字段）
+    RfcGetTypeDesc
     ; Server 端 API
     RfcRegisterServer
     RfcListenAndDispatch

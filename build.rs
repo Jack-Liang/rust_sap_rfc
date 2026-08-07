@@ -75,6 +75,27 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-undefined,dynamic_lookup");
     }
 
+    // 嵌入运行时库搜索路径（rpath），让可执行文件自动找到 SDK 动态库，
+    // 用户无需手动设置 LD_LIBRARY_PATH / DYLD_LIBRARY_PATH。
+    // 两条 rpath 覆盖两种场景，链接器依次尝试：
+    //   @loader_path/nwrfcsdk/lib/<os>-<arch>            发布包（二进制与 nwrfcsdk/ 同级）
+    //   @loader_path/../../nwrfcsdk/lib/<os>-<arch>      开发期（二进制在 target/release/）
+    // Windows 不需要：DLL 搜索默认查 exe 同目录及其子目录。
+    if target_os == "linux" || target_os == "macos" {
+        let rpaths = [
+            format!("@loader_path/nwrfcsdk/lib/{target_dir}"),
+            format!("@loader_path/../../nwrfcsdk/lib/{target_dir}"),
+        ];
+        for rpath in &rpaths {
+            if target_os == "linux" {
+                println!("cargo:rustc-link-arg=-Wl,-rpath,{rpath}");
+            } else {
+                // macOS 用 -rpath（与 Linux 同），注意带空格的写法
+                println!("cargo:rustc-link-arg=-Wl,-rpath,{rpath}");
+            }
+        }
+    }
+
     println!("cargo:warning=使用 SAP NWRFC SDK: {}", target_dir);
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=SAP_SDK_DIR");
