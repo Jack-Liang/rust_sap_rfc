@@ -97,12 +97,11 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 |---|---|
 | 连接 | ✅ 直连（ASHOST），自动重连，优雅停机 |
 | 标量输入 | ✅ string/int/float 自动按 JSON 类型派发；BCD/INT8/二进制用显式 `{"type":"...","value":...}` |
-| 标量输出 | ✅ `int_outputs`（整数）/ `string_outputs`（字符串）/ `auto_outputs`（按元数据真实类型自动读，含 float/bcd/二进制 Base64）|
-| 表参数（TABLES） | ✅ 输入多行 + 输出遍历 |
-| 顶层结构体参数 | ✅ `struct_inputs` / `struct_outputs`（如 BAPI_USER_CREATE.ADDRESS） |
-| BCD 金额/数量 | ✅ 以字符串保留小数位语义 |
-| 二进制（XSTRING/BYTE）| ✅ Base64 编码传输 |
-| 元数据自动发现 | ✅ 字段长度+类型缓存，无需手填 max_len |
+| 标量输出 | ✅ `int_outputs`（按 INT 读）/ `string_outputs`（按字符串读，长度可自动发现） |
+| 表参数（TABLES） | ✅ 输入多行 + 输出遍历（**输出字段统一按字符串读**，无类型保留） |
+| 顶层结构体参数 | ✅ `struct_inputs` / `struct_outputs`（如 BAPI_USER_CREATE.ADDRESS），输出同样统一按字符串读 |
+| BCD/INT8/二进制 输入 | ✅ `{"type":"BCD",...}` / `{"type":"INT8",...}` / `{"type":"BYTES",...}`（BYTES 用 Base64） |
+| 元数据自动发现 | ✅ 字段长度缓存，无需手填 max_len（标量/表/结构体输出均生效） |
 | Server 端（被 SAP 回调）| ✅ 配置驱动 webhook 转发（`SAP_ROLE=server`），详见 §11 |
 | tRFC/qRFC/bgRFC | ❌ 不支持 |
 | SSO/SNC 安全登录 | ❌ 仅用户名密码 |
@@ -114,6 +113,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 | 并发 | 多连接池（默认 8，`SAP_POOL_SIZE` 可配），不同请求可并行执行 SAP 调用 |
 | 字符集 | 通过 UTF-16 桥接 SAP UC，UTF-8 输入输出 |
 | 平台 | Windows/Linux/macOS × x86_64/aarch64（`build.rs` 自动选 SDK 子目录） |
+| RFC 调用超时 | 当前无超时，慢请求可能长时间占用连接 |
 
 ---
 
@@ -122,16 +122,24 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 ### 2.1 SAP NWRFC SDK
 
 本项目**不附带** SDK 二进制。请从 [SAP Support](https://launchpad.support.sap.com) 下载
-`sapnwrfcsdk`（Windows x64），放到项目根目录或自定义路径：
+`sapnwrfcsdk`（按目标平台选），放到 `nwrfcsdk/lib/<os>-<arch>/` 子目录：
 
 ```
 rust_sap_rfc/
 └── nwrfcsdk/
     └── lib/
-        └── sapnwrfc.dll       ← 必须存在
+        └── windows-x86_64/      ← Windows x64
+            ├── sapnwrfc.dll
+            ├── sapnwrfc.lib
+            ├── libsapucum.dll
+            └── libsapucum.lib
+        └── linux-x86_64/        ← Linux x64
+            ├── libsapnwrfc.so
+            └── libsapucum.so
+        # 其他平台：linux-aarch64 / darwin-x86_64 / darwin-aarch64 同理
 ```
 
-`build.rs` 默认链接 `./nwrfcsdk/lib`，路径不同请改 `build.rs` 中的 `sdk_dir`。
+`build.rs` 会按 `CARGO_CFG_TARGET_OS` + `CARGO_CFG_TARGET_ARCH` 自动选择对应的 `<os>-<arch>` 子目录。路径不同请改 [`build.rs`](./build.rs) 中的 `sdk_dir`。详细平台列表见 [`nwrfcsdk/README.md`](./nwrfcsdk/README.md)。
 
 ### 2.2 Rust 工具链
 
@@ -161,6 +169,7 @@ cp .env.example .env
 | `SAP_PASSWD` | ✅ | — | 登录密码 |
 | `SAP_LANG` | ❌ | `EN` | 登录语言 |
 | `SAP_LISTEN_ADDR` | ❌ | `127.0.0.1:3000` | HTTP 服务监听地址 |
+| `SAP_POOL_SIZE` | ❌ | `8` | SAP 连接池上限（并发调用数），≥1 |
 
 > **生产部署提示**：不要把 `.env` 放进镜像层。用容器编排系统的密钥注入（K8s Secret / Docker Swarm secret）替代。
 
@@ -168,18 +177,30 @@ cp .env.example .env
 
 ## 4. 启动
 
+通过环境变量 `SAP_ROLE` 选择运行模式（默认 `client`）：
+
+| 值 | 行为 |
+|---|---|
+| `client`（默认）| 仅 client 模式：HTTP server，接受调用方请求并打到 SAP |
+| `server` | 仅 server 模式：注册到 SAP Gateway，被 SAP 回调时转发到 webhook（见 [§11](#11-server-端被-sap-调用反向代理)） |
+| `both` | 两个并行 |
+
+### 4.1 client 模式
+
 ```bash
-cargo run --release
+cargo run --release              # 或 ./start.sh / powershell -File start.ps1
 ```
 
 成功启动会输出：
 
 ```
-=== Rust SAP RFC -> REST 服务 ===
-✅ SAP 系统连接成功
-✅ HTTP 服务监听: http://127.0.0.1:3000
-   - POST /api/rfc   通用 RFC 调用
-   - GET  /health    健康检查
+=== Rust SAP RFC 服务启动 ===
+运行模式 role=client
+client 配置加载完成 listen="0.0.0.0:3000"
+SAP 系统连接成功（多连接池）
+HTTP 服务监听 addr="0.0.0.0:3000"
+  - POST /api/rfc   通用 RFC 调用
+  - GET  /health    健康检查
 ```
 
 启动失败常见原因见 [§9 部署提示](#9-部署提示)。
@@ -210,11 +231,10 @@ cargo run --release
 | `inputs` | object | ❌ | 标量输入参数：参数名 → 值（隐式：字符串→CHARS、整数→INT、浮点→FLOAT） |
 | `table_inputs` | object | ❌ | 表输入参数：表名 → 行数组；每行是 字段名 → 值 |
 | `struct_inputs` | object | ❌ | 顶层结构体输入：结构体名 → {字段名 → 值}（如 `ADDRESS`） |
-| `int_outputs` | string[] | ❌ | 要读取的整型输出参数名列表 |
-| `string_outputs` | object | ❌ | 要读取的字符串输出参数：参数名 → 最大长度 |
-| `auto_outputs` | string[] | ❌ | 按**元数据真实类型**自动读的标量输出名（保留 float/bcd/二进制语义）|
-| `table_outputs` | object | ❌ | 要读取的输出表：表名 → `[字段名, 最大长度]` 数组 |
-| `struct_outputs` | object | ❌ | 要读取的顶层结构体输出：结构体名 → 字段列表 |
+| `int_outputs` | string[] | ❌ | 要读取的整型输出参数名列表（按 SAP `INT` 读） |
+| `string_outputs` | object | ❌ | 要读取的字符串输出参数：参数名 → 最大长度。`max_len` 留 `null` 时由服务端从元数据自动发现 |
+| `table_outputs` | object | ❌ | 要读取的输出表：表名 → 字段对象数组 `{"name":"...","max_len":...}` |
+| `struct_outputs` | object | ❌ | 要读取的顶层结构体输出：结构体名 → 字段对象数组 |
 | `read_return` | bool | ❌ | 是否自动读取 BAPI 通用 `RETURN` 消息表，默认 `false` |
 
 **值类型规则**（`inputs` / `table_inputs` / `struct_inputs` 的字段值）：
@@ -231,11 +251,9 @@ cargo run --release
 ```jsonc
 {
   "func": "BAPI_USER_GETLIST",                // 回显函数名
-  "scalars": {                                 // 标量输出（按读取方式决定类型）
-    "ROWS": 50,                                //   int_outputs → 数字
-    "AMOUNT": 123.45,                          //   auto_outputs + FLOAT → 浮点
-    "PRICE": "999.99",                         //   auto_outputs + BCD → 字符串保留小数
-    "BINARY": "aGVsbG8="                       //   auto_outputs + XSTRING → Base64 字符串
+  "scalars": {                                 // 标量输出
+    "ROWS": 50,                                //   int_outputs → JSON 整数
+    "ECHOTEXT": "Hello"                        //   string_outputs → JSON 字符串
   },
   "tables": {                                  // 表输出：表名 → 行数组（字段统一字符串）
     "USERLIST": [
@@ -243,13 +261,15 @@ cargo run --release
     ]
   },
   "structs": {                                 // 顶层结构体输出（struct_outputs 声明时出现）
-    "RETURN": { "TYPE": "S", "MESSAGE": "..." }
+    "ADDRESS": { "FIRSTNAME": "Dev", "LASTNAME": "User" }
   },
-  "return": [                                  // 仅当 read_return=true 且存在 RETURN 表时
+  "return_table": [                            // 仅当 read_return=true 且存在 RETURN 表时
     { "TYPE": "S", "ID": "01", "NUMBER": "123", "MESSAGE": "..." }
   ]
 }
 ```
+
+> ⚠️ **当前版本的限制**：`table_outputs` 与 `struct_outputs` 的字段值统一按字符串读取，即使 SAP 侧类型是 INT/FLOAT/BCD/二进制。需要在调用方保留数值/二进制精度时，可改用 `BAPI_TRANSACTION_COMMIT` 等带结构化输入/输出的 BAPI，或自行用 SAP GUI/SE37 二次处理。
 
 未读取的字段（如没传 `table_outputs`）在响应中对应键**不出现**（`tables` 为空对象）。
 
@@ -295,14 +315,16 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
     "int_outputs": ["ROWS"],
     "table_outputs": {
       "USERLIST": [
-        ["USERNAME", 12],
-        ["FIRSTNAME", 40],
-        ["LASTNAME", 40]
+        {"name": "USERNAME", "max_len": 12},
+        {"name": "FIRSTNAME", "max_len": 40},
+        {"name": "LASTNAME",  "max_len": 40}
       ]
     },
     "read_return": true
   }'
 ```
+
+> `max_len` 也可省略 → 服务端按 SAP 元数据自动发现。例如 `{"name": "USERNAME"}`。
 
 ### 6.3 带选择条件 — `BAPI_USER_GETLIST` + `SELECTION_RANGE`
 
@@ -326,7 +348,11 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
     },
     "int_outputs": ["ROWS"],
     "table_outputs": {
-      "USERLIST": [["USERNAME", 12], ["FIRSTNAME", 40], ["LASTNAME", 40]]
+      "USERLIST": [
+        {"name": "USERNAME",  "max_len": 12},
+        {"name": "FIRSTNAME", "max_len": 40},
+        {"name": "LASTNAME",  "max_len": 40}
+      ]
     }
   }'
 ```
@@ -477,26 +503,25 @@ src/
 ### 10.2 并发模型
 
 ```
-[HTTP 请求] ─▶ axum handler（async）
-                │
-                ├─▶ spawn_blocking ─▶ [Mutex 锁] ─▶ RfcInvoke (FFI)
-                │                                    │
-                └─◀── await JoinHandle ◀────────────┘
+[HTTP 请求 N] ─▶ axum handler（async）
+                  │
+                  ├─▶ spawn_blocking ─▶ [连接池抢一个空闲连接] ─▶ RfcInvoke (FFI)
+                  │                                                     │
+                  └─◀── await JoinHandle ◀───────────────────────────────┘
 ```
 
 - **为什么用 `spawn_blocking`**：SAP 调用是阻塞 FFI，直接在 tokio worker 上跑会卡住整个运行时
 - **为什么需要 `unsafe impl Send`**：`RfcConnection` 持裸指针非 Send；在 `Mutex` 串行化保护下，NWRFC SDK 允许跨线程串行使用同一连接，故 sound
-- **代价**：所有请求共享一把锁 → 并发请求排队
+- **池大小**：默认 `SAP_POOL_SIZE=8`，可在 `.env` 调整。请求从池里抢空闲连接，未抢到则等待；连接失败时按需自动重连
 
-### 10.3 升级路径（当前不支持，提示扩展点）
+### 10.3 升级路径（规划中，提示扩展点）
 
 | 需求 | 状态 / 改造方向 |
 |---|---|
-| ~~高并发~~ | ✅ 已实现：多连接池（`SAP_POOL_SIZE` 可配） |
-| ~~数值类型输出表字段~~ | ✅ 已实现：`auto_outputs` 按元数据类型自动读 |
-| ~~结构体输入~~ | ✅ 已实现：`struct_inputs` / `struct_outputs` |
 | 鉴权 | axum 加 `tower-http` 中间件 + API Key 校验 |
-| ~~可观测性~~ | ✅ 已实现：tracing 结构化日志 |
+| RFC 调用超时 | `tokio::time::timeout` 包 `spawn_blocking`，慢请求不挂死服务 |
+| 数值/二进制类型输出表字段 | 当前表/结构体输出统一按 string 读；后续在 `table_outputs` 字段定义加类型标记，executor 按真实类型读（`get_int` / `get_float` / `get_xstring` 等已实现） |
+| tRFC/qRFC | 暂不支持 |
 
 ---
 
@@ -648,4 +673,6 @@ if __name__ == "__main__":
 
 ## License
 
-私有项目，未指定开源协议。
+本项目基于 [MIT License](LICENSE) 开源。
+
+> **关于 SAP NWRFC SDK**：本项目链接了 SAP 私有 SDK（[`build.rs`](./build.rs)），其使用受你与 SAP 之间的协议约束。MIT 协议仅适用于本仓库源码，不延伸至 SDK 本身。

@@ -12,7 +12,7 @@
 # 运行：见下方 EXAMPLE，或 README §9
 
 # ============ 构建阶段 ============
-FROM rust:1.83-slim-bookworm AS builder
+FROM docker.m.daocloud.io/library/rust:1.93-slim-bookworm AS builder
 
 # 编译期依赖：libssl 链接（SAP SDK 依赖 openssl）
 RUN apt-get update && apt-get install -y --no-install-recommends \

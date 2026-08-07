@@ -18,15 +18,27 @@ Desktop.ini
 # Logs
 *.log
 
-# SAP NWRFC SDK：保留目录结构与说明文件，但不上传二进制库与发行包
+# SAP NWRFC SDK：白名单策略 —— 除以下文件外，nwrfcsdk/ 下所有内容均不上传
 # （SAP SDK 受版权限制，需各开发者自行从 SAP Support 下载）
-nwrfcsdk/**/*.dll
-nwrfcsdk/**/*.lib
-nwrfcsdk/**/*.so
-nwrfcsdk/**/*.so.*
-nwrfcsdk/**/*.a
-nwrfcsdk/**/*.dylib
-nwrfcsdk/**/*.zip
+#
+# 保留：
+#   - nwrfcsdk/README.md
+#   - nwrfcsdk/include/  全部头文件
+#   - nwrfcsdk/lib/<os>-<arch>/.gitignore  各平台子目录的占位文件
+#     （让目录在 git 里真实存在，clone 后可直接往里放 SDK 库）
+#
+# 先全部忽略，再按需恢复：
+nwrfcsdk/**
+# 恢复：说明文件与头文件目录
+!/nwrfcsdk/README.md
+!/nwrfcsdk/include/
+!/nwrfcsdk/include/*.h
+!/nwrfcsdk/include/*.hpp
+# 恢复：各平台 lib 子目录及目录内的 .gitignore 占位文件
+!/nwrfcsdk/lib/
+!/nwrfcsdk/lib/*/
+!/nwrfcsdk/lib/*/.gitignore
+!/nwrfcsdk/lib/*/*/.gitignore
 
 # 本地环境变量（含真实凭据，不要提交）
 .env
