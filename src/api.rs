@@ -199,6 +199,25 @@ pub struct InvokeRequest {
     pub read_return: bool,
 }
 
+/// 为 discovery 模块的程序化构造提供便利：func_name 默认空（调用方必须覆盖），
+/// 其余字段取自然默认值（空 map/vec/false）。
+impl Default for InvokeRequest {
+    fn default() -> Self {
+        Self {
+            func_name: String::new(),
+            inputs: HashMap::new(),
+            table_inputs: HashMap::new(),
+            struct_inputs: HashMap::new(),
+            int_outputs: Vec::new(),
+            string_outputs: HashMap::new(),
+            auto_outputs: Vec::new(),
+            table_outputs: HashMap::new(),
+            struct_outputs: HashMap::new(),
+            read_return: false,
+        }
+    }
+}
+
 /// 表输出字段规范：`["USERNAME"]` 或 `["USERNAME", 12]`
 /// 用序列化元组实现：第一项必填字段名，第二项可选长度。
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -484,6 +503,179 @@ fn read_return_table(
         rows.push(m);
     }
     Ok(Some(rows))
+}
+
+// ========================================================================
+// 面向 AI 的元数据 API 响应 DTO（端点 ① ~ ⑤）
+// ========================================================================
+
+/// 把 RFCTYPE 数值常量转成人类/AI 可读的类型名（如 0 → "CHAR"）。
+/// 未知类型回退 "TYPE_<n>"。
+pub fn rfctype_name(t: i32) -> &'static str {
+    match t {
+        0 => "CHAR",
+        1 => "DATE",
+        2 => "BCD",
+        3 => "TIME",
+        4 => "BYTE",
+        5 => "TABLE",
+        6 => "NUM",
+        7 => "FLOAT",
+        8 => "INT",
+        9 => "INT2",
+        10 => "INT1",
+        17 => "STRUCTURE",
+        29 => "STRING",
+        30 => "XSTRING",
+        _ => "UNKNOWN",
+    }
+}
+
+/// 把 RFC_DIRECTION 位掩码转成方向名（import/export/changing/tables/unknown）。
+pub fn direction_name(d: i32) -> &'static str {
+    use crate::ffi::*;
+    match d {
+        RFC_DIRECTION_IMPORT => "IMPORT",
+        RFC_DIRECTION_EXPORT => "EXPORT",
+        RFC_DIRECTION_CHANGING => "CHANGING",
+        RFC_DIRECTION_TABLES => "TABLES",
+        _ => "UNKNOWN",
+    }
+}
+
+/// 字段定义（用于函数参数嵌套字段、DDIC 类型字段）
+#[derive(Debug, Serialize)]
+pub struct FieldDef {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_name: &'static str,
+    pub length: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub decimals: u32,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// 嵌套结构体/表的子字段（仅 STRUCTURE/TABLE 且有展开时出现）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<FieldDef>>,
+}
+
+/// RFC_DIRECTION 位掩码为 0（字段无方向）时不输出 decimals 的判断函数
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+impl FieldDef {
+    /// 由 metadata::TypeFieldMeta 构造（含递归子字段）
+    pub fn from_type_field(f: &crate::metadata::TypeFieldMeta) -> Self {
+        Self {
+            name: f.name.clone(),
+            type_name: rfctype_name(f.type_),
+            length: f.char_length,
+            decimals: f.decimals,
+            description: f.description.clone(),
+            fields: f.sub_fields.as_ref().map(|subs| {
+                subs.iter().map(FieldDef::from_type_field).collect()
+            }),
+        }
+    }
+}
+
+// --- 端点① GET /api/functions/{name} ---
+
+#[derive(Debug, Serialize)]
+pub struct FunctionParam {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_name: &'static str,
+    pub direction: &'static str,
+    pub length: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub decimals: u32,
+    pub optional: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub default: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<FieldDef>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FunctionInterface {
+    pub name: String,
+    pub params: Vec<FunctionParam>,
+}
+
+// --- 端点② POST /api/functions/search ---
+
+#[derive(Debug, Serialize)]
+pub struct SearchFunctionEntry {
+    pub name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub group: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub description: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SearchResponse {
+    pub pattern: String,
+    pub count: usize,
+    pub functions: Vec<SearchFunctionEntry>,
+}
+
+// --- 端点③ GET /api/ddic/type/{name} ---
+
+#[derive(Debug, Serialize)]
+pub struct DdicTypeResponse {
+    pub name: String,
+    pub fields: Vec<FieldDef>,
+}
+
+// --- 端点④ GET /api/ddic/field/{table}/{field} ---
+
+#[derive(Debug, Serialize)]
+pub struct FixedValueDto {
+    pub value: String,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FieldSemanticsResponse {
+    pub table: String,
+    pub field: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub data_element: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub domain: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub check_table: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub medium_label: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub fixed_values: Vec<FixedValueDto>,
+}
+
+// --- 端点⑤ GET /api/functions/{name}/doc ---
+
+#[derive(Debug, Serialize)]
+pub struct ParamDoc {
+    pub name: String,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FunctionDocResponse {
+    pub name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub short_text: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub long_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    pub parameter_docs: Vec<ParamDoc>,
 }
 
 #[cfg(test)]

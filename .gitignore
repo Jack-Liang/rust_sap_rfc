@@ -6,6 +6,7 @@ release/
 # IDE
 .vscode/
 .idea/
+.zcode/
 *.swp
 *.swo
 *~

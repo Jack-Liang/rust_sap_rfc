@@ -96,11 +96,19 @@ impl RfcConnection {
                 let name = crate::string_utils::sap_uc_to_string(pdesc.name.as_ptr(), 30);
                 // ucLength 是 2-byte-per-SAP_CHAR 系统的字节长度，字符长度 = ucLength / 2
                 let char_length = pdesc.ucLength / 2;
+                let parameter_text =
+                    crate::string_utils::sap_uc_to_string(pdesc.parameterText.as_ptr(), 79);
+                let default_value =
+                    crate::string_utils::sap_uc_to_string(pdesc.defaultValue.as_ptr(), 30);
                 out.push(ParamInfo {
                     name,
                     type_: pdesc.type_,
                     char_length: char_length as usize,
                     direction: pdesc.direction,
+                    decimals: pdesc.decimals,
+                    optional: pdesc.optional != 0,
+                    parameter_text,
+                    default_value,
                     type_desc_handle: if pdesc.typeDescHandle.handle.is_null() {
                         None
                     } else {
@@ -109,6 +117,29 @@ impl RfcConnection {
                 });
             }
             Ok(out)
+        }
+    }
+
+    /// 按 DDIC 类型名（结构/表/类型，如 MARA、BAPIRETURN）取类型描述符。
+    /// 返回的 type_handle 可传给 get_field_infos() 读字段元数据。
+    pub fn get_type_desc(
+        &self,
+        type_name: &str,
+    ) -> Result<RFC_TYPE_DESC_HANDLE, RfcError> {
+        unsafe {
+            let mut error_info = std::mem::zeroed::<RFC_ERROR_INFO>();
+            let name_uc = crate::string_utils::str_to_sap_uc(type_name);
+            let type_handle = RfcGetTypeDesc(self.handle, name_uc.as_ptr(), &mut error_info);
+            // RfcGetTypeDesc 失败时 code != RFC_OK；成功但返回 null handle 也视为错误
+            check_rc(error_info.code, &error_info)?;
+            if type_handle.handle.is_null() {
+                return Err(RfcError {
+                    code: error_info.code,
+                    message: format!("DDIC 类型 [{}] 未找到或无字段定义", type_name),
+                    key: crate::string_utils::sap_uc_to_string(error_info.key.as_ptr(), 128),
+                });
+            }
+            Ok(type_handle)
         }
     }
 }
@@ -123,6 +154,14 @@ pub struct ParamInfo {
     pub char_length: usize,
     /// RFC_DIRECTION 位掩码（import/export/changing/tables）
     pub direction: i32,
+    /// 小数位数（对 BCD/FLOAT 有意义）
+    pub decimals: u32,
+    /// 是否可选（RFC_BYTE，非 0 表示可选）
+    pub optional: bool,
+    /// 参数描述文本（parameterText，最多 79 字符，常为中文说明）
+    pub parameter_text: String,
+    /// 参数默认值（defaultValue，最多 30 字符）
+    pub default_value: String,
     /// 若为结构体/表，持有其子类型句柄（用于进一步查询字段长度）
     pub type_desc_handle: Option<RFC_TYPE_DESC_HANDLE>,
 }
@@ -134,6 +173,10 @@ impl std::fmt::Debug for ParamInfo {
             .field("type_", &self.type_)
             .field("char_length", &self.char_length)
             .field("direction", &self.direction)
+            .field("decimals", &self.decimals)
+            .field("optional", &self.optional)
+            .field("parameter_text", &self.parameter_text)
+            .field("default_value", &self.default_value)
             .field("type_desc_handle", &self.type_desc_handle.is_some())
             .finish()
     }
@@ -163,6 +206,10 @@ pub unsafe fn get_field_infos(
             type_: fdesc.type_,
             char_length: char_length as usize,
             direction: 0, // 字段没有方向
+            decimals: fdesc.decimals,
+            optional: false, // 字段没有 optional 标记
+            parameter_text: String::new(), // RFC_FIELD_DESC 无 parameterText
+            default_value: String::new(),  // RFC_FIELD_DESC 无 defaultValue
             type_desc_handle: if fdesc.typeDescHandle.handle.is_null() {
                 None
             } else {

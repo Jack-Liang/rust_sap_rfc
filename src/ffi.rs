@@ -266,6 +266,15 @@ extern "system" {
         errorInfo: *mut RFC_ERROR_INFO,
     ) -> RFC_RC;
 
+    /// 按精确名查 DDIC 结构/表/类型的描述符（用于查数据字典字段）。
+    /// 返回的 typeHandle 可传给 RfcGetFieldCount/RfcGetFieldDescByIndex 读字段。
+    /// 失败时 errorInfo->code != RFC_OK，且可能返回 null handle。
+    pub fn RfcGetTypeDesc(
+        rfcHandle: RFC_CONNECTION_HANDLE,
+        typeName: *const SAP_UC,
+        errorInfo: *mut RFC_ERROR_INFO,
+    ) -> RFC_TYPE_DESC_HANDLE;
+
     // ============ Server 端 API（被 SAP 回调）============
 
     /// 注册到 SAP Gateway，返回 server connection handle
