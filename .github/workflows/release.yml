@@ -1,0 +1,123 @@
+name: Release
+
+# 自动构建多平台预编译二进制并上传到 GitHub Release。
+#
+# 触发方式：推送形如 `v0.1.0` 的 tag 时自动运行。
+#   git tag v0.1.0
+#   git push origin v0.1.0
+#
+# 产物：
+#   rust_sap_rfc-windows-x86_64.zip
+#   rust_sap_rfc-linux-x86_64.tar.gz
+#   rust_sap_rfc-linux-aarch64.tar.gz
+#   rust_sap_rfc-darwin-x86_64.tar.gz
+#   rust_sap_rfc-darwin-aarch64.tar.gz
+#
+# 注意：预编译二进制不包含 SAP NWRFC SDK（受版权限制）。
+# 用户仍需：
+#   1. 注册 SAP Support Portal 账号，下载 SAP NWRFC SDK
+#   2. 把库文件放到 nwrfcsdk/lib/<os>-<arch>/，或通过环境变量 SAP_SDK_DIR 指向已安装路径
+# 详见 README §「下载预编译二进制」。
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Unix 系：在 CI 上自动 build（用空 .so/.dylib 满足 build.rs 占位）
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            archive: tar.gz
+            binary: rust_sap_rfc
+            platform_dir: linux-x86_64
+            lib_name: libsapnwrfc.so
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            archive: tar.gz
+            binary: rust_sap_rfc
+            platform_dir: linux-aarch64
+            lib_name: libsapnwrfc.so
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            archive: tar.gz
+            binary: rust_sap_rfc
+            platform_dir: darwin-x86_64
+            lib_name: libsapnwrfc.dylib
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            archive: tar.gz
+            binary: rust_sap_rfc
+            platform_dir: darwin-aarch64
+            lib_name: libsapnwrfc.dylib
+          # Windows：受限于 stub .lib 不能可靠通过 MSVC link，由维护者本地手工构建并上传
+          # 详见 README §「下载预编译二进制」
+          # - target: x86_64-pc-windows-msvc
+          #   runner: windows-latest
+          #   ...
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+
+      # 生成 build.rs 所需的「含库文件的目录」占位
+      # 真正的 SAP SDK 受版权限制不能下载，链接期 link 不到符号；
+      # 但 Cargo 的 `dylib=sapnwrfc` 模式允许编译期不解析符号（运行时才查），
+      # 因此只需让 build.rs 看到目录里有「库文件」即可。
+      - name: Prepare stub SDK (Linux/macOS)
+        shell: bash
+        run: |
+          STUB=nwrfcsdk/lib/${{ matrix.platform_dir }}
+          mkdir -p "$STUB"
+          echo "int sapnwrfc_stub;" > /tmp/stub.c
+          ${CC:-cc} -c /tmp/stub.c -o /tmp/stub.o
+          ${CC:-cc} -shared -o "$STUB/${{ matrix.lib_name }}" /tmp/stub.o
+          ls -la "$STUB"
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
+          cp README.md dist/
+          cp .env.example dist/
+          cp -r nwrfcsdk dist/nwrfcsdk
+          # 把 stub .so/.dylib 清掉，避免用户误以为是真实 SDK
+          find dist/nwrfcsdk/lib -name "libsapnwrfc.so" -delete
+          find dist/nwrfcsdk/lib -name "libsapnwrfc.dylib" -delete
+          find dist/nwrfcsdk/lib -name "*.zip" -delete
+          cd dist
+          tar czf ../rust_sap_rfc-${{ matrix.target }}.tar.gz *
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: rust_sap_rfc-${{ matrix.target }}.${{ matrix.archive }}
+          generate_release_notes: true

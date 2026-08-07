@@ -12,6 +12,8 @@
 ## 目录
 
 - [Quick Start（5 分钟跑起来）](#quick-start5-分钟跑起来)
+- [自动安装 SDK（推荐）](#自动安装-sdk推荐)
+- [下载预编译二进制（推荐给最终用户）](#下载预编译二进制推荐给最终用户)
 - [1. 适用场景与限制](#1-适用场景与限制)
 - [2. 准备工作](#2-准备工作)
 - [3. 配置](#3-配置)
@@ -23,12 +25,67 @@
 - [9. 部署提示](#9-部署提示)
 - [10. 架构与限制](#10-架构与限制)
 - [11. Server 端：被 SAP 调用（反向代理）](#11-server-端被-sap-调用反向代理)
+- [12. 发布新版本（维护者）](#12-发布新版本维护者)
 
 ---
 
 ## Quick Start（5 分钟跑起来）
 
-> 唯一的硬前提：**SAP NWRFC SDK**（受版权限制不能随仓库分发，需从 [SAP Support Portal](https://launchpad.support.sap.com) 下载）。详见 [`nwrfcsdk/README.md`](./nwrfcsdk/README.md)。
+> **两个东西都需要**：
+> 1. **预编译二进制 / Rust 源码**：提供 HTTP 服务和 SAP 协议绑定代码
+> 2. **SAP NWRFC SDK**：SAP 私有 C 库，提供实际的 SAP 通信实现（受版权限制不能随项目分发）
+>
+> 预编译二进制**省的是装 Rust 工具链 + 23 秒编译**，但**省不掉 SDK**——运行时仍要链接 SAP 库。
+>
+> 📦 **省事的做法**：把 SAP 下载的 zip（如 `nwrfcsdk-7.50.18-linux-x86_64.zip`）丢进 `nwrfcsdk/lib/<任意子目录>/`，启动脚本会自动解压到正确路径，**无需手动识别哪个文件该放哪**。详见 §「自动安装 SDK」。
+
+### 自动安装 SDK（推荐）
+
+`start.sh` / `start.ps1` 会按以下顺序找 SDK：
+
+1. **环境变量 `SAP_SDK_DIR`** —— 指向已安装的 SDK 根目录（最灵活，Docker/CI 常用）
+2. **`nwrfcsdk/lib/<os>-<arch>/`** —— 已放好库文件的默认路径
+3. **`nwrfcsdk/lib/<任意>/nwrfcsdk-*.zip`** —— 自动识别并解压到正确路径 ✨
+4. 都没有 → 报错并清晰指引
+
+最省事：把 SAP 下载的 zip 整个丢到 `nwrfcsdk/lib/` 下任意子目录，启动脚本会自动处理。例如：
+
+```
+nwrfcsdk/
+└── lib/
+    └── incoming/                  ← 随便建一个目录
+        └── nwrfcsdk-7.50.18-linux-x86_64.zip   ← 把 zip 丢这里
+```
+
+然后跑 `./start.sh`，脚本会自动：
+
+- 解压 zip
+- 识别 zip 内的库文件位置（SAP SDK zip 通常是 `nwrfcsdk/lib/<file>` 无平台子目录）
+- 复制到 `nwrfcsdk/lib/linux-x86_64/`（或对应平台子目录）
+- 清理临时文件
+
+解压后的真实路径仍按 SAP 官方约定保留，便于后续更新 SDK。
+
+### 下载预编译二进制（推荐给最终用户）
+
+不用装 Rust，直接用现成二进制：
+
+1. 打开 [GitHub Releases](../../releases) → 选最新 tag
+2. 下载对应平台的压缩包：
+   - Linux x86_64: `rust_sap_rfc-x86_64-unknown-linux-gnu.tar.gz`
+   - Linux ARM64: `rust_sap_rfc-aarch64-unknown-linux-gnu.tar.gz`
+   - macOS Intel: `rust_sap_rfc-x86_64-apple-darwin.tar.gz`
+   - macOS Apple Silicon: `rust_sap_rfc-aarch64-apple-darwin.tar.gz`
+   - Windows: 见下
+3. 解压，里面有 `rust_sap_rfc`（或 `.exe`）+ `README.md` + `.env.example` + `nwrfcsdk/` 目录骨架
+4. **下载 SAP NWRFC SDK**：到 [SAP Support Portal](https://launchpad.support.sap.com) 注册账号（需 SAP 客户/合作伙伴身份），搜索 `SAP NW RFC SDK`，按平台下载 zip
+5. **把 zip 放到 `nwrfcsdk/lib/<任意子目录>/` 下**（如 `nwrfcsdk/lib/incoming/`），启动脚本会自动解压到正确路径
+6. `cp .env.example .env` 并填 SAP 连接参数
+7. 运行：
+   - Linux/macOS: `./rust_sap_rfc`
+   - Windows: 双击 `rust_sap_rfc_demo.exe` 或 PowerShell 启动
+
+> **Windows 用户**：CI 当前不自动构建 Windows 二进制（受限于 stub .lib 不能可靠通过 MSVC link）。请维护者在 Windows 上 `cargo build --release` 后手动上传，或参考方式一本地编译。
 
 ### 方式一：本地运行（开发/调试）
 
@@ -670,6 +727,28 @@ if __name__ == "__main__":
 | webhook 超时 | 30 秒硬编码（后续可配置化） |
 
 ---
+
+## 12. 发布新版本（维护者）
+
+1. 提交所有改动，本地构建确认通过：
+   ```bash
+   cargo test
+   cargo build --release
+   ```
+2. 更新 `Cargo.toml` 里的 `version` 字段（如 `0.1.0` → `0.2.0`）
+3. 打 tag 并推送，CI 自动构建 Linux/macOS 二进制并上传到 GitHub Release：
+   ```bash
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+4. Windows 二进制需要维护者在 Windows 上手工构建并上传：
+   ```powershell
+   cargo build --release
+   Compress-Archive -Path target/release/*, README.md, .env.example, nwrfcsdk -DestinationPath rust_sap_rfc-x86_64-pc-windows-msvc.zip
+   ```
+   然后到 GitHub Release 页面手动 attach。
+
+> CI 工作流：[`.github/workflows/release.yml`](./.github/workflows/release.yml)。改动 [build.rs](./build.rs) 让 `SAP_SDK_DIR` 环境变量可指向任意 SDK 安装目录，方便 Docker / CI / 自定义路径使用。
 
 ## License
 

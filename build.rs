@@ -1,16 +1,22 @@
 use std::path::PathBuf;
 
 fn main() {
-    // SDK 根目录，可根据实际路径调整
-    let sdk_dir = PathBuf::from("./nwrfcsdk");
+    // SDK 根目录查找顺序：
+    //   1) 环境变量 SAP_SDK_DIR（推荐用于 Docker、CI、自定义安装路径）
+    //   2) 环境变量 SAP_SDK_HOST_PATH（兼容 docker-compose.yml 里的旧名）
+    //   3) ./nwrfcsdk（默认，仓库内子目录）
+    let sdk_dir = std::env::var("SAP_SDK_DIR")
+        .or_else(|_| std::env::var("SAP_SDK_HOST_PATH"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("./nwrfcsdk"));
 
     // 根据目标平台三元组选择对应的 lib 子目录。
-    // 目录约定：nwrfcsdk/lib/<os>-<arch>/
+    // 目录约定：<sdk_dir>/lib/<os>-<arch>/
     //   - windows-x86_64   sapnwrfc.dll + sapnwrfc.lib + ICU dlls
     //   - linux-x86_64     libsapnwrfc.so (+ libsapucum.so)
     //   - linux-aarch64    同上 ARM64
     //   - darwin-x86_64    libsapnwrfc.dylib
-    //   - darwin-aarch64   同上 Apple Silicon
+    //   - darwin-aarch64    同上 Apple Silicon
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let target_dir = format!("{}-{}", os, arch);
@@ -20,7 +26,8 @@ fn main() {
     if !lib_dir.exists() {
         panic!(
             "未找到目标平台 [{target_dir}] 的 SAP NWRFC SDK 库目录：{}\n\
-             请创建该目录并放入对应平台的 SDK 文件（见 nwrfcsdk/README.md）。",
+             请创建该目录并放入对应平台的 SDK 文件（见 nwrfcsdk/README.md）。\n\
+             也可通过环境变量 SAP_SDK_DIR 指向已安装的 SDK 根目录。",
             lib_dir.display()
         );
     }
@@ -39,7 +46,8 @@ fn main() {
         panic!(
             "目标平台 [{target_dir}] 的库目录中未找到任何 SDK 库文件 (.dll/.so/.dylib)：{}\n\
              目录可能只含占位说明。请从 SAP 下载对应平台的 NWRFC SDK 并把\n\
-             sapnwrfc 的动态库放入该目录（详见 nwrfcsdk/README.md）。",
+             sapnwrfc 的动态库放入该目录（详见 nwrfcsdk/README.md）。\n\
+             也可通过环境变量 SAP_SDK_DIR 指向已安装的 SDK 根目录。",
             lib_dir.display()
         );
     }
@@ -51,4 +59,6 @@ fn main() {
 
     println!("cargo:warning=使用 SAP NWRFC SDK: {}", target_dir);
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=SAP_SDK_DIR");
+    println!("cargo:rerun-if-env-changed=SAP_SDK_HOST_PATH");
 }
