@@ -1,0 +1,10 @@
+# 此目录存放 Windows x86_64 的 SAP NWRFC SDK 库。
+#
+# 需放入（从 SAP 下载的 Windows NWRFC SDK 取得）：
+#   sapnwrfc.dll
+#   sapnwrfc.lib
+#   sapucum.dll
+#   icu*.dll（ICU 运行时，随 SDK 提供）
+#
+# 这些 .dll/.lib 文件会被 git 忽略（见根目录 .gitignore），仅本地使用。
+# 获取与放置步骤详见上级目录 README.md。

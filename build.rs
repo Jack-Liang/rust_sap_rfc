@@ -35,11 +35,17 @@ fn main() {
     }
 
     // 检查目录内确实存在库文件（区分于「只有占位说明文件的空目录」）
+    // .dll/.so/.dylib：真实 SDK 或 Unix stub 占位库
+    // .lib：Windows 导入库（真实 SDK 含 sapnwrfc.lib + sapnwrfc.dll；
+    //       CI 用 lib.exe 从 .def 生成的 stub sapnwrfc.lib 满足链接期符号解析）
     let has_lib = std::fs::read_dir(&lib_dir)
         .map(|entries| {
             entries.filter_map(Result::ok).any(|e| {
                 let name = e.file_name().to_string_lossy().to_lowercase();
-                name.ends_with(".dll") || name.ends_with(".so") || name.ends_with(".dylib")
+                name.ends_with(".dll")
+                    || name.ends_with(".so")
+                    || name.ends_with(".dylib")
+                    || name.ends_with(".lib")
             })
         })
         .unwrap_or(false);

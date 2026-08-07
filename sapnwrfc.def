@@ -1,0 +1,61 @@
+; SAP NWRFC SDK 导入库定义文件
+;
+; 用途：CI 上无法分发受版权保护的 sapnwrfc.dll，但 MSVC link.exe 在链接期
+; 必须解析所有符号（不像 Linux/macOS 能运行时再查）。本文件列出 ffi.rs 中
+; extern "system" 声明的全部导出函数，用 lib.exe 生成一个「空壳」导入库
+; sapnwrfc.lib，让链接期通过；运行期由用户挂载真实 sapnwrfc.dll 解析符号。
+;
+; 生成命令（Windows MSVC 环境）：
+;   lib /def:sapnwrfc.def /machine:x64 /out:sapnwrfc.lib
+;
+; x64 MSVC 无名称修饰（不像 x86 的 stdcall 有 @N 后缀），函数名原样列出。
+; 若未来新增 FFI 符号，需同步追加到此文件。
+
+LIBRARY sapnwrfc.dll
+EXPORTS
+    ; 连接管理
+    RfcOpenConnection
+    RfcCloseConnection
+    ; 函数元数据与实例
+    RfcGetFunctionDesc
+    RfcCreateFunction
+    RfcDestroyFunction
+    ; 字符串 / 整数读写
+    RfcSetString
+    RfcGetString
+    RfcSetInt
+    RfcGetInt
+    ; 浮点
+    RfcSetFloat
+    RfcGetFloat
+    ; 8 字节整数
+    RfcSetInt8
+    RfcGetInt8
+    ; 二进制变长 (XSTRING)
+    RfcSetXString
+    RfcGetXString
+    ; 执行远程调用
+    RfcInvoke
+    ; 表操作
+    RfcGetTable
+    ; 结构体
+    RfcGetStructure
+    RfcGetRowCount
+    RfcMoveTo
+    RfcGetCurrentRow
+    RfcAppendNewRow
+    ; 函数元数据
+    RfcGetParameterCount
+    RfcGetParameterDescByIndex
+    ; 结构体字段元数据
+    RfcGetFieldDescByIndex
+    RfcGetFieldCount
+    ; Server 端 API
+    RfcRegisterServer
+    RfcListenAndDispatch
+    RfcInstallServerFunction
+    RfcCreateFunctionDesc
+    RfcAddParameter
+    RfcDestroyFunctionDesc
+    RfcGetFunctionName
+    RfcDescribeFunction

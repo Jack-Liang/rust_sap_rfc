@@ -1,7 +1,13 @@
 [package]
 name = "rust_sap_rfc_demo"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
+
+# package 名保留历史值（避免改动 Cargo.lock 的依赖树），
+# 但发布产物的二进制名统一为 rust_sap_rfc，不带 demo 后缀。
+[[bin]]
+name = "rust_sap_rfc"
+path = "src/main.rs"
 
 [dependencies]
 # Web 服务（client 模式）

@@ -76,16 +76,16 @@ nwrfcsdk/
    - Linux ARM64: `rust_sap_rfc-aarch64-unknown-linux-gnu.tar.gz`
    - macOS Intel: `rust_sap_rfc-x86_64-apple-darwin.tar.gz`
    - macOS Apple Silicon: `rust_sap_rfc-aarch64-apple-darwin.tar.gz`
-   - Windows: 见下
+   - Windows x86_64: `rust_sap_rfc-x86_64-pc-windows-msvc.zip`
 3. 解压，里面有 `rust_sap_rfc`（或 `.exe`）+ `README.md` + `.env.example` + `nwrfcsdk/` 目录骨架
 4. **下载 SAP NWRFC SDK**：到 [SAP Support Portal](https://launchpad.support.sap.com) 注册账号（需 SAP 客户/合作伙伴身份），搜索 `SAP NW RFC SDK`，按平台下载 zip
 5. **把 zip 放到 `nwrfcsdk/lib/<任意子目录>/` 下**（如 `nwrfcsdk/lib/incoming/`），启动脚本会自动解压到正确路径
 6. `cp .env.example .env` 并填 SAP 连接参数
 7. 运行：
    - Linux/macOS: `./rust_sap_rfc`
-   - Windows: 双击 `rust_sap_rfc_demo.exe` 或 PowerShell 启动
+   - Windows: 双击 `rust_sap_rfc.exe` 或 PowerShell 启动
 
-> **Windows 用户**：CI 当前不自动构建 Windows 二进制（受限于 stub .lib 不能可靠通过 MSVC link）。请维护者在 Windows 上 `cargo build --release` 后手动上传，或参考方式一本地编译。
+> **Windows 用户**：CI 现已自动构建 Windows x86_64 二进制（通过 `.def` 文件生成 stub 导入库绕过 MSVC 链接限制）。解压 zip 后仍需自行放置 `sapnwrfc.dll`，详见第 4–5 步。
 
 ### 方式一：本地运行（开发/调试）
 
@@ -736,17 +736,17 @@ if __name__ == "__main__":
    cargo build --release
    ```
 2. 更新 `Cargo.toml` 里的 `version` 字段（如 `0.1.0` → `0.2.0`）
-3. 打 tag 并推送，CI 自动构建 Linux/macOS 二进制并上传到 GitHub Release：
+3. 打 tag 并推送，CI 自动构建 Linux/macOS/Windows 二进制并上传到 GitHub Release：
    ```bash
    git tag v0.2.0
    git push origin v0.2.0
    ```
-4. Windows 二进制需要维护者在 Windows 上手工构建并上传：
+4. Windows 二进制由 CI 自动产出（`.def` + `lib.exe` 生成 stub 导入库绕过 MSVC 链接限制），
+   无需维护者手工构建。如需本地复现 CI 的 stub 链接，可在「x64 Native Tools Command Prompt」中：
    ```powershell
+   lib /def:sapnwrfc.def /machine:x64 /out:nwrfcsdk\lib\windows-x86_64\sapnwrfc.lib
    cargo build --release
-   Compress-Archive -Path target/release/*, README.md, .env.example, nwrfcsdk -DestinationPath rust_sap_rfc-x86_64-pc-windows-msvc.zip
    ```
-   然后到 GitHub Release 页面手动 attach。
 
 > CI 工作流：[`.github/workflows/release.yml`](./.github/workflows/release.yml)。改动 [build.rs](./build.rs) 让 `SAP_SDK_DIR` 环境变量可指向任意 SDK 安装目录，方便 Docker / CI / 自定义路径使用。
 

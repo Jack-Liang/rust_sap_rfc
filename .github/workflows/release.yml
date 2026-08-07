@@ -7,7 +7,7 @@ name: Release
 #   git push origin v0.1.0
 #
 # 产物：
-#   rust_sap_rfc-windows-x86_64.zip
+#   rust_sap_rfc-x86_64-pc-windows-msvc.zip
 #   rust_sap_rfc-linux-x86_64.tar.gz
 #   rust_sap_rfc-linux-aarch64.tar.gz
 #   rust_sap_rfc-darwin-x86_64.tar.gz
@@ -38,7 +38,7 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             archive: tar.gz
-            binary: rust_sap_rfc_demo
+            binary: rust_sap_rfc
             platform_dir: linux-x86_64
             lib_name: libsapnwrfc.so
             cc: cc
@@ -46,7 +46,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             archive: tar.gz
-            binary: rust_sap_rfc_demo
+            binary: rust_sap_rfc
             platform_dir: linux-aarch64
             lib_name: libsapnwrfc.so
             cc: aarch64-linux-gnu-gcc
@@ -55,7 +55,7 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-latest
             archive: tar.gz
-            binary: rust_sap_rfc_demo
+            binary: rust_sap_rfc
             platform_dir: darwin-x86_64
             lib_name: libsapnwrfc.dylib
             cc: cc
@@ -64,17 +64,23 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-latest
             archive: tar.gz
-            binary: rust_sap_rfc_demo
+            binary: rust_sap_rfc
             platform_dir: darwin-aarch64
             lib_name: libsapnwrfc.dylib
             cc: cc
             cross_compile: false
             mac_target: arm64
-          # Windows：受限于 stub .lib 不能可靠通过 MSVC link，由维护者本地手工构建并上传
-          # 详见 README §「下载预编译二进制」
-          # - target: x86_64-pc-windows-msvc
-          #   runner: windows-latest
-          #   ...
+          # Windows：用 lib.exe 从 .def 生成 stub 导入库满足 MSVC 链接期符号解析，
+          # 运行期由用户挂载真实 sapnwrfc.dll。详见 README §「下载预编译二进制」
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            archive: zip
+            binary: rust_sap_rfc.exe
+            platform_dir: windows-x86_64
+            lib_name: sapnwrfc.lib
+            cc: cl
+            cross_compile: false
+            is_windows: true
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -106,10 +112,13 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.target }}-
 
       # 生成 build.rs 所需的「含库文件的目录」占位
-      # 真正的 SAP SDK 受版权限制不能下载，链接期 link 不到符号；
-      # 但 Cargo 的 `dylib=sapnwrfc` 模式允许编译期不解析符号（运行时才查），
-      # 因此只需让 build.rs 看到目录里有「匹配目标架构的库文件」即可。
+      # 真正的 SAP SDK 受版权限制不能下载。
+      # - Unix：Cargo 的 `dylib=sapnwrfc` + 链接器 unresolved-symbols 选项允许
+      #   编译期不解析符号（运行时才查），故只需放一个空 .so/.dylib 占位。
+      # - Windows：MSVC link.exe 必须链接期解析符号。用 lib.exe 从 .def 生成
+      #   stub 导入库 sapnwrfc.lib，运行期由用户挂载真实 sapnwrfc.dll。
       - name: Prepare stub SDK (Linux/macOS)
+        if: runner.os != 'Windows'
         shell: bash
         env:
           # macOS 交叉编译用 -arch，Linux 交叉编译用交叉编译器前缀
@@ -136,6 +145,18 @@ jobs:
             file "$STUB/${{ matrix.lib_name }}" || true
           fi
 
+      - name: Prepare stub import lib (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stub = "nwrfcsdk\lib\${{ matrix.platform_dir }}"
+          New-Item -ItemType Directory -Force -Path $stub | Out-Null
+          # 从 .def 生成 stub 导入库；lib.exe 在 VS 的 MSVC 工具链里，
+          # windows-latest runner 自带，已通过 vcvars 加入 PATH。
+          lib /def:sapnwrfc.def /machine:x64 /out:"$stub\${{ matrix.lib_name }}"
+          Get-ChildItem $stub
+
       # 交叉编译时配置 cargo 使用正确的 linker
       - name: Set cargo linker for cross-compile
         if: matrix.cross_compile == true
@@ -158,12 +179,19 @@ jobs:
           cp README.md dist/
           cp .env.example dist/
           cp -r nwrfcsdk dist/nwrfcsdk
-          # 把 stub .so/.dylib 清掉，避免用户误以为是真实 SDK
+          # 把 stub 库清掉，避免用户误以为是真实 SDK
+          # （Windows stub 是 .lib 导入库，Unix stub 是 .so/.dylib）
           find dist/nwrfcsdk/lib -name "libsapnwrfc.so" -delete
           find dist/nwrfcsdk/lib -name "libsapnwrfc.dylib" -delete
+          find dist/nwrfcsdk/lib -name "sapnwrfc.lib" -delete
           find dist/nwrfcsdk/lib -name "*.zip" -delete
           cd dist
-          tar czf ../rust_sap_rfc-${{ matrix.target }}.tar.gz *
+          if [[ "${{ matrix.archive }}" == "zip" ]]; then
+            # windows-latest 的 Git Bash 不带 zip 命令，用预装的 7-Zip
+            7z a -tzip ../rust_sap_rfc-${{ matrix.target }}.zip .
+          else
+            tar czf ../rust_sap_rfc-${{ matrix.target }}.tar.gz *
+          fi
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
