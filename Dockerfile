@@ -49,7 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # 只拷贝编译产物，不拷贝 nwrfcsdk/
-COPY --from=builder /app/target/release/rust_sap_rfc_demo /app/rust_sap_rfc
+COPY --from=builder /app/target/release/rust_sap_rfc /app/rust_sap_rfc
 
 # 挂载点：宿主机 SAP SDK 在运行时挂到此处
 # 期望目录结构：/app/nwrfcsdk/lib/linux-x86_64/libsapnwrfc.so (+ libsapucum.so)

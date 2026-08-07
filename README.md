@@ -83,7 +83,7 @@ nwrfcsdk/
 6. `cp .env.example .env` 并填 SAP 连接参数
 7. 运行：
    - Linux/macOS: `./rust_sap_rfc`
-   - Windows: 双击 `rust_sap_rfc_demo.exe` 或 PowerShell 启动
+   - Windows: 双击 `rust_sap_rfc.exe` 或 PowerShell 启动
 
 > **Windows 用户**：CI 现已自动构建 Windows x86_64 二进制（通过 `.def` 文件生成 stub 导入库绕过 MSVC 链接限制）。解压 zip 后仍需自行放置 `sapnwrfc.dll`，详见第 4–5 步。
 

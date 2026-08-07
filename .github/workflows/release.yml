@@ -38,7 +38,7 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             archive: tar.gz
-            binary: rust_sap_rfc_demo
+            binary: rust_sap_rfc
             platform_dir: linux-x86_64
             lib_name: libsapnwrfc.so
             cc: cc
@@ -46,7 +46,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             archive: tar.gz
-            binary: rust_sap_rfc_demo
+            binary: rust_sap_rfc
             platform_dir: linux-aarch64
             lib_name: libsapnwrfc.so
             cc: aarch64-linux-gnu-gcc
@@ -55,7 +55,7 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-latest
             archive: tar.gz
-            binary: rust_sap_rfc_demo
+            binary: rust_sap_rfc
             platform_dir: darwin-x86_64
             lib_name: libsapnwrfc.dylib
             cc: cc
@@ -64,7 +64,7 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-latest
             archive: tar.gz
-            binary: rust_sap_rfc_demo
+            binary: rust_sap_rfc
             platform_dir: darwin-aarch64
             lib_name: libsapnwrfc.dylib
             cc: cc
@@ -75,7 +75,7 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
             archive: zip
-            binary: rust_sap_rfc_demo.exe
+            binary: rust_sap_rfc.exe
             platform_dir: windows-x86_64
             lib_name: sapnwrfc.lib
             cc: cl
