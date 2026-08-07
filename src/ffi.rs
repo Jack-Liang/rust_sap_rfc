@@ -31,19 +31,23 @@ pub const RFC_DIRECTION_CHANGING: c_int = 0x03; // IMPORT | EXPORT
 pub const RFC_DIRECTION_TABLES: c_int = 0x07; // 0x04 | CHANGING
 
 // ABAP 数据类型（节选自 sapnwrfc.h RFCTYPE 枚举）
-// 部分常量当前未直接使用，保留以便后续类型映射扩展。
-// 用模块包起来统一 allow，避免逐个标注。
+// 公开为 pub mod，供 server_config 等模块按名引用。
 #[allow(dead_code)]
-mod rfctype {
+pub mod rfctype {
     pub const CHAR: i32 = 0;
     pub const DATE: i32 = 1;
+    pub const BCD: i32 = 2;
     pub const TIME: i32 = 3;
+    pub const BYTE: i32 = 4;
     pub const TABLE: i32 = 5;
     pub const NUM: i32 = 6;
+    pub const FLOAT: i32 = 7;
     pub const INT: i32 = 8;
     pub const INT2: i32 = 9;
     pub const INT1: i32 = 10;
     pub const STRUCTURE: i32 = 17;
+    pub const STRING: i32 = 29;
+    pub const XSTRING: i32 = 30;
 }
 pub use rfctype::{CHAR as RFCTYPE_CHAR, STRUCTURE as RFCTYPE_STRUCTURE, TABLE as RFCTYPE_TABLE};
 
@@ -65,17 +69,17 @@ pub struct RFC_CONNECTION_PARAMETER {
 // 注意每个 abap_msg_xxx 字段都含 +1 的 null 终止符位
 #[repr(C)]
 pub struct RFC_ERROR_INFO {
-    pub code: RFC_RC,             // RFC_RC (int)
-    pub group: c_int,             // RFC_ERROR_GROUP (enum = int)
-    pub key: [SAP_UC; 128],       // SAP_UC key[128]
-    pub message: [SAP_UC; 512],   // SAP_UC message[512]
-    pub abap_msg_class: [SAP_UC; 21],  // SAP_UC abapMsgClass[20+1]
-    pub abap_msg_type: [SAP_UC; 2],    // SAP_UC abapMsgType[1+1]
-    pub abap_msg_number: [SAP_UC; 4],  // RFC_NUM abapMsgNumber[3+1]（RFC_NUM=SAP_UC）
-    pub abap_msg_v1: [SAP_UC; 51],     // SAP_UC abapMsgV1[50+1]
-    pub abap_msg_v2: [SAP_UC; 51],     // SAP_UC abapMsgV2[50+1]
-    pub abap_msg_v3: [SAP_UC; 51],     // SAP_UC abapMsgV3[50+1]
-    pub abap_msg_v4: [SAP_UC; 51],     // SAP_UC abapMsgV4[50+1]
+    pub code: RFC_RC,                 // RFC_RC (int)
+    pub group: c_int,                 // RFC_ERROR_GROUP (enum = int)
+    pub key: [SAP_UC; 128],           // SAP_UC key[128]
+    pub message: [SAP_UC; 512],       // SAP_UC message[512]
+    pub abap_msg_class: [SAP_UC; 21], // SAP_UC abapMsgClass[20+1]
+    pub abap_msg_type: [SAP_UC; 2],   // SAP_UC abapMsgType[1+1]
+    pub abap_msg_number: [SAP_UC; 4], // RFC_NUM abapMsgNumber[3+1]（RFC_NUM=SAP_UC）
+    pub abap_msg_v1: [SAP_UC; 51],    // SAP_UC abapMsgV1[50+1]
+    pub abap_msg_v2: [SAP_UC; 51],    // SAP_UC abapMsgV2[50+1]
+    pub abap_msg_v3: [SAP_UC; 51],    // SAP_UC abapMsgV3[50+1]
+    pub abap_msg_v4: [SAP_UC; 51],    // SAP_UC abapMsgV4[50+1]
 }
 
 // Windows NWRFC SDK 使用 _stdcall 调用约定，等同于 "system"（Windows 上 stdcall = system）
@@ -293,7 +297,15 @@ extern "system" {
         errorInfo: *mut RFC_ERROR_INFO,
     ) -> RFC_FUNCTION_DESC_HANDLE;
 
-    /// 删除函数描述符
+    /// 向函数描述符添加参数定义
+    pub fn RfcAddParameter(
+        funcDesc: RFC_FUNCTION_DESC_HANDLE,
+        paramDescr: *const RFC_PARAMETER_DESC,
+        errorInfo: *mut RFC_ERROR_INFO,
+    ) -> RFC_RC;
+
+    /// 删除函数描述符（保留供未来清理用）
+    #[allow(dead_code)]
     pub fn RfcDestroyFunctionDesc(
         funcDescHandle: RFC_FUNCTION_DESC_HANDLE,
         errorInfo: *mut RFC_ERROR_INFO,

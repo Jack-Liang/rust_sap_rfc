@@ -16,7 +16,7 @@ use std::os::raw::{c_int, c_void};
 ///
 /// # Safety
 /// `data_handle` 必须是有效的函数句柄或结构体句柄；`name_uc` 必须为 0 结尾的 SAP UC。
-unsafe fn read_string_adaptive(
+pub(crate) unsafe fn read_string_adaptive(
     data_handle: *mut c_void,
     name_uc: *const SAP_UC,
     max_len: usize,
@@ -59,7 +59,10 @@ unsafe fn read_string_adaptive(
 ///
 /// # Safety
 /// `data_handle` 必须有效；`name_uc` 为 0 结尾 SAP UC。
-unsafe fn read_float(data_handle: *mut c_void, name_uc: *const SAP_UC) -> Result<f64, RfcError> {
+pub(crate) unsafe fn read_float(
+    data_handle: *mut c_void,
+    name_uc: *const SAP_UC,
+) -> Result<f64, RfcError> {
     let mut error_info = std::mem::zeroed::<RFC_ERROR_INFO>();
     let mut value: f64 = 0.0;
     let rc = RfcGetFloat(data_handle, name_uc, &mut value, &mut error_info);

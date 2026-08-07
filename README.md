@@ -22,6 +22,7 @@
 - [8. 错误处理](#8-错误处理)
 - [9. 部署提示](#9-部署提示)
 - [10. 架构与限制](#10-架构与限制)
+- [11. Server 端：被 SAP 调用（反向代理）](#11-server-端被-sap-调用反向代理)
 
 ---
 
@@ -102,7 +103,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 | BCD 金额/数量 | ✅ 以字符串保留小数位语义 |
 | 二进制（XSTRING/BYTE）| ✅ Base64 编码传输 |
 | 元数据自动发现 | ✅ 字段长度+类型缓存，无需手填 max_len |
-| Server 端（被 SAP 回调）| ❌ 暂不支持（需 SAP 侧 SM59 配合，单独立项） |
+| Server 端（被 SAP 回调）| ✅ 配置驱动 webhook 转发（`SAP_ROLE=server`），详见 §11 |
 | tRFC/qRFC/bgRFC | ❌ 不支持 |
 | SSO/SNC 安全登录 | ❌ 仅用户名密码 |
 
@@ -110,7 +111,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 
 | 项 | 说明 |
 |---|---|
-| 并发 | 全局单连接 + 互斥锁，请求**串行**执行。低并发够用；高并发需自行扩展为连接池 |
+| 并发 | 多连接池（默认 8，`SAP_POOL_SIZE` 可配），不同请求可并行执行 SAP 调用 |
 | 字符集 | 通过 UTF-16 桥接 SAP UC，UTF-8 输入输出 |
 | 平台 | Windows/Linux/macOS × x86_64/aarch64（`build.rs` 自动选 SDK 子目录） |
 
@@ -489,13 +490,159 @@ src/
 
 ### 10.3 升级路径（当前不支持，提示扩展点）
 
-| 需求 | 改造方向 |
+| 需求 | 状态 / 改造方向 |
 |---|---|
-| 高并发 | `Arc<Mutex<Vec<RfcConnection>>>` 连接池，handler 抢空闲连接 |
-| 数值类型输出表字段 | 在 `table_outputs` 字段定义里加类型标记，executor 按类型读 |
-| 结构体输入 | `api.rs` 加 `struct_inputs`，executor 用 `RfcGetStructure` |
+| ~~高并发~~ | ✅ 已实现：多连接池（`SAP_POOL_SIZE` 可配） |
+| ~~数值类型输出表字段~~ | ✅ 已实现：`auto_outputs` 按元数据类型自动读 |
+| ~~结构体输入~~ | ✅ 已实现：`struct_inputs` / `struct_outputs` |
 | 鉴权 | axum 加 `tower-http` 中间件 + API Key 校验 |
-| 可观测性 | 引入 `tracing` + `tracing-subscriber`，替换 `println!` |
+| ~~可观测性~~ | ✅ 已实现：tracing 结构化日志 |
+
+---
+
+## 11. Server 端：被 SAP 调用（反向代理）
+
+除 client 模式（HTTP→SAP）外，本服务还支持 **server 模式**：让 SAP 系统通过 RFC 回调本服务，本服务把调用转发到配置的 HTTP webhook。实现「SAP → HTTP」的反向代理，与 client 对称。
+
+典型用途：让 ABAP 程序调用外部微服务（无需 ABAP 写 HTTP 客户端）；把业务事件从 SAP 推送到外部系统。
+
+### 11.1 工作原理
+
+```
+[SAP 系统]
+  1. SM59 配 RFC Destination（Type T, Registration mode, Program ID=ZREST_SERVER）
+  2. ABAP: CALL FUNCTION 'Z_REST_PING' DESTINATION 'ZREST'
+       │
+       ▼ (SAP 主动连本服务注册的 Program ID)
+[本服务: RfcListenAndDispatch 循环]
+  3. 收到 Z_REST_PING 调用 → 读入参
+  4. POST {func, inputs} 到配置的 webhook_url
+  5. 收 webhook 响应 {outputs} → 回填 EXPORTING 参数
+       │
+       ▼
+[配置的 webhook 服务（任意语言）]
+  收到请求 → 业务处理 → 返回结果
+```
+
+### 11.2 启用 server 模式
+
+通过环境变量 `SAP_ROLE` 控制：
+
+| 值 | 行为 |
+|---|---|
+| `client`（默认）| 仅 client 模式（现有 HTTP server） |
+| `server` | 仅 server 模式（dispatch 循环，被 SAP 调） |
+| `both` | 两个并行（client HTTP + server dispatch） |
+
+```bash
+# 1. 配置 servers.toml（cp servers.toml.example servers.toml 后编辑）
+#    填 gateway 地址 + program_id + 函数定义 + webhook URL
+
+# 2. 启动（server 模式）
+SAP_ROLE=server SERVERS_CONFIG=servers.toml cargo run --release
+```
+
+### 11.3 配置文件 `servers.toml`
+
+```toml
+[gateway]
+gwhost = "192.168.0.215"        # SAP Gateway 主机
+gwserv = "sapgw00"              # sysnr 00 → sapgw00
+program_id = "ZREST_SERVER"     # 必须与 SM59 的 Program ID 一致
+
+[[functions]]
+name = "Z_REST_PING"            # SAP 调用的函数名
+webhook_url = "http://localhost:9000/ping"
+
+[[functions.params]]
+name = "INPUT"
+direction = "import"            # import/export/changing/tables
+type = "char"                   # char/int/float/bcd/date/time/num/byte/xstring/string
+length = 255
+
+[[functions.params]]
+name = "OUTPUT"
+direction = "export"
+type = "char"
+length = 1024
+```
+
+> **重要**：`program_id` 必须与 SAP 侧 SM59 配置完全一致。函数名建议用 `Z_` 前缀（自定义命名空间）。
+
+### 11.4 SAP 侧 SM59 配置（你负责）
+
+在 SAP 系统（SE37/SM59）配置 RFC Destination：
+
+1. **T-code `SM59`** → Create
+2. **RFC Connection Type**: `T`（TCP/IP Connection）
+3. **Activation Type**: **Registered Server Program**
+4. **Program ID**: 与 `servers.toml` 的 `program_id` 一致（如 `ZREST_SERVER`）
+5. **Gateway Host**: SAP 系统的 gateway（即 `servers.toml` 里 `gwhost` 指向的系统的 gw）
+6. **Gateway Service**: `sapgw00`（对应 sysnr）
+7. **保存后测试**：点 Connection Test。此时本服务必须已启动并注册，否则测试会失败
+
+ABAP 调用示例：
+```abap
+DATA: lv_input  TYPE c LENGTH 255,
+      lv_output TYPE c LENGTH 1024.
+
+lv_input = 'hello'.
+CALL FUNCTION 'Z_REST_PING' DESTINATION 'ZREST'
+  IMPORTING
+    input  = lv_input
+  EXPORTING
+    output = lv_output.
+" lv_output 现在是 webhook 返回的处理结果
+```
+
+### 11.5 webhook 协议
+
+**请求**（本服务 POST 给 webhook）：
+```json
+{
+  "func": "Z_REST_PING",
+  "inputs": { "INPUT": "hello" }
+}
+```
+
+**响应**（webhook 返回）：
+```json
+{
+  "outputs": { "OUTPUT": "processed: hello" }
+}
+```
+
+- 请求/响应都是 JSON，Content-Type: application/json
+- webhook 必须**在 30 秒内返回**（否则 SAP 端 RFC 超时）
+- `outputs` 的键必须与 `[[functions.params]]` 里 direction=export 的参数名一致
+- webhook 返回非 2xx 或超时 → 本服务向 SAP 回传 `SYSTEM_FAILURE`
+
+### 11.6 webhook 示例（Python Flask）
+
+```python
+from flask import Flask, request, jsonify
+app = Flask(__name__)
+
+@app.post("/ping")
+def ping():
+    data = request.json
+    inp = data["inputs"]["INPUT"]
+    # 业务处理
+    return jsonify({"outputs": {"OUTPUT": f"processed: {inp}"}})
+
+if __name__ == "__main__":
+    app.run(port=9000)
+```
+
+### 11.7 限制（首版）
+
+| 项 | 说明 |
+|---|---|
+| 无状态 | 每个 SAP 调用独立处理，不维护 stateful session |
+| 串行 dispatch | 单线程 dispatch，SAP 并发调用排队（可后续多线程） |
+| 类型简化 | 入参/出参统一按字符串读写（数值类型靠 webhook 侧自行转换） |
+| 不支持 tRFC/qRFC | 事务回调首版未实现 |
+| webhook 超时 | 30 秒硬编码（后续可配置化） |
 
 ---
 

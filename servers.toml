@@ -1,0 +1,22 @@
+# Server 模式配置（host 网络模式：用 localhost 直连）
+
+[gateway]
+gwhost = "localhost"
+gwserv = "sapgw00"
+program_id = "ZREST_SERVER"
+
+[[functions]]
+name = "Z_REST_PING"
+webhook_url = "http://localhost:9000/ping"
+
+[[functions.params]]
+name = "INPUT"
+direction = "import"
+type = "char"
+length = 255
+
+[[functions.params]]
+name = "OUTPUT"
+direction = "export"
+type = "char"
+length = 1024

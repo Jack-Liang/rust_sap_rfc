@@ -1,0 +1,62 @@
+# Server 模式配置：SAP→HTTP 反向代理
+#
+# 用法：SAP_ROLE=server SERVERS_CONFIG=servers.toml cargo run --release
+# 详见 README §11「Server 端」。
+
+# ============ Gateway 连接（注册到 SAP）============
+# 这些值必须与 SAP 侧 SM59 配置的 RFC Destination（Type T, Registration mode）一致
+[gateway]
+# SAP Gateway 主机名/IP（你的 SAP 系统地址）
+gwhost = "host.docker.internal"
+# Gateway 服务名：sysnr 00 → sapgw00，sysnr 01 → sapgw01
+gwserv = "sapgw00"
+# Program ID：必须与 SM59 里 RFC Destination 的「Program ID」完全一致
+program_id = "ZREST_SERVER"
+
+# ============ 对外暴露的 RFC 函数 ============
+# 每个函数定义：SAP 调用什么名、参数、收到调用时转发到哪个 webhook
+
+# 示例1：Z_REST_PING（SAP 端 CALL FUNCTION 'Z_REST_PING' DESTINATION '...')
+[[functions]]
+name = "Z_REST_PING"
+# 收到调用时 POST 到此 URL（任何能处理 HTTP 的服务）
+webhook_url = "http://localhost:9000/ping"
+
+# 参数定义（用于 SDK 注册函数元数据）
+[[functions.params]]
+name = "INPUT"
+direction = "import"     # import / export / changing / tables
+type = "char"            # char/int/float/bcd/date/time/num/byte/xstring/string
+length = 255             # 字符长度（int/float 可省略）
+
+[[functions.params]]
+name = "OUTPUT"
+direction = "export"
+type = "char"
+length = 1024
+
+# 示例2：Z_REST_ECHO（回显，演示多函数）
+[[functions]]
+name = "Z_REST_ECHO"
+webhook_url = "http://localhost:9000/echo"
+
+[[functions.params]]
+name = "TEXT_IN"
+direction = "import"
+type = "char"
+length = 255
+
+[[functions.params]]
+name = "TEXT_OUT"
+direction = "export"
+type = "char"
+length = 255
+
+# ============ webhook 协议 ============
+# 请求体（本服务 POST 给 webhook）：
+#   {"func":"Z_REST_PING","inputs":{"INPUT":"some value"}}
+#
+# 响应体（webhook 返回）：
+#   {"outputs":{"OUTPUT":"processed result"}}
+#
+# webhook 必须在 30 秒内返回，否则 SAP 端会超时。

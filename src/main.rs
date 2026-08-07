@@ -8,6 +8,8 @@ mod function;
 mod metadata;
 mod pool;
 mod server;
+mod server_config;
+mod server_rfc;
 mod string_utils;
 
 use crate::pool::RfcConnectionPool;
@@ -23,54 +25,133 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    tracing::info!("=== Rust SAP RFC -> REST 服务启动 ===");
+    tracing::info!("=== Rust SAP RFC 服务启动 ===");
 
     // 2. 加载 .env（找不到文件不报错，可由真实环境变量替代）
+    let _ = dotenvy::dotenv();
+
+    // 3. 决定运行模式：client（默认）/ server / both
+    let role = std::env::var("SAP_ROLE").unwrap_or_else(|_| "client".to_string());
+    tracing::info!(%role, "运行模式");
+
+    match role.as_str() {
+        "client" => run_client().await?,
+        "server" => run_server().await?,
+        "both" => {
+            // both 模式：server 在独立 OS 线程（dispatch 阻塞），client 在当前 tokio
+            let server_thread = std::thread::spawn(run_server_blocking);
+
+            // client 并行跑（直到停机或出错）
+            tokio::select! {
+                res = run_client() => {
+                    if let Err(e) = res {
+                        tracing::error!(?e, "client 模式异常退出");
+                    }
+                }
+                _ = wait_shutdown_signal() => {
+                    tracing::info!("收到停机信号");
+                }
+            }
+            // 等 server 线程（gateway 断开后自动退出）
+            let _ = server_thread.join();
+        }
+        other => {
+            return Err(
+                format!("未知的 SAP_ROLE='{}'，可选: client / server / both", other).into(),
+            );
+        }
+    }
+
+    tracing::info!("服务已停止");
+    Ok(())
+}
+
+/// client 模式：现有 HTTP server（SAP client → REST）
+async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     let dotenv_result = dotenvy::dotenv();
     let cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
-            // 配置缺失时给完整引导，而非冷冰冰的单变量报错
             print_config_guide(&e, dotenv_result.is_err());
             return Err(e.into());
         }
     };
-    tracing::info!(listen = cfg.listen_addr, "配置加载完成");
+    tracing::info!(listen = cfg.listen_addr, "client 配置加载完成");
 
-    // 3. 创建连接池：首次建连，后续失败自动重连
-    let pool = RfcConnectionPool::new(cfg.conn_params)?;
-    tracing::info!("SAP 系统连接成功");
+    let pool = RfcConnectionPool::with_max_size(cfg.conn_params, cfg.pool_size)?;
+    tracing::info!(pool_size = cfg.pool_size, "SAP 系统连接成功（多连接池）");
     let shared: server::SharedPool = Arc::new(pool);
 
-    // 4. 构造优雅停机信号：Ctrl+C 或 SIGTERM 触发
-    let shutdown = async move {
-        let ctrl_c = async {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("安装 ctrl-c 信号处理器失败");
-        };
+    let shutdown = make_shutdown_signal();
+    server::run(shared, &cfg.listen_addr, shutdown).await?;
+    Ok(())
+}
 
-        #[cfg(unix)]
-        let terminate = async {
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("安装 SIGTERM 信号处理器失败")
-                .recv()
-                .await;
-        };
+/// server 模式：SAP server（被 SAP 回调 → webhook 转发）
+async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
+    let servers_path =
+        std::env::var("SERVERS_CONFIG").unwrap_or_else(|_| "servers.toml".to_string());
+    let cfg = server_config::load(&servers_path)
+        .map_err(|e| format!("Server 配置加载失败 ({}): {}", servers_path, e))?;
+    tracing::info!(path = %servers_path, funcs = cfg.functions.len(), "server 配置加载完成");
 
-        #[cfg(not(unix))]
-        let terminate = std::future::pending::<()>();
+    // server_rfc::run 阻塞，放独立线程；主线程等停机信号
+    let handle = std::thread::spawn(move || {
+        if let Err(e) = server_rfc::run(&cfg) {
+            tracing::error!(code = e.code, msg = %e.message, "server 运行失败");
+        }
+    });
 
-        tokio::select! {
-            _ = ctrl_c => tracing::info!("收到 Ctrl+C 信号，开始优雅停机"),
-            _ = terminate => tracing::info!("收到 SIGTERM 信号，开始优雅停机"),
+    wait_shutdown_signal().await;
+    tracing::info!("收到停机信号，等待 server 线程退出（gateway 断开后自动退出）");
+    let _ = handle.join();
+    Ok(())
+}
+
+/// server 模式的阻塞版本（both 模式内部用）
+fn run_server_blocking() {
+    let servers_path =
+        std::env::var("SERVERS_CONFIG").unwrap_or_else(|_| "servers.toml".to_string());
+    let cfg = match server_config::load(&servers_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Server 配置加载失败: {}", e);
+            return;
         }
     };
+    if let Err(e) = server_rfc::run(&cfg) {
+        tracing::error!(code = e.code, msg = %e.message, "server 运行失败");
+    }
+}
 
-    // 5. 启动 axum（with_graceful_shutdown 让在飞请求完成后再退出）
-    server::run(shared, &cfg.listen_addr, shutdown).await?;
-    tracing::info!("服务已停止");
-    Ok(())
+/// 等待停机信号（Ctrl+C / SIGTERM）
+async fn wait_shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("安装 ctrl-c 信号处理器失败");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("安装 SIGTERM 信号处理器失败")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => tracing::info!("收到 Ctrl+C 信号"),
+        _ = terminate => tracing::info!("收到 SIGTERM 信号"),
+    }
+}
+
+/// 构造优雅停机信号 future（client 模式用）
+fn make_shutdown_signal() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+    Box::pin(wait_shutdown_signal())
 }
 
 /// 配置缺失时的友好引导。检测「无 .env 文件」这一典型场景，给出针对性步骤。

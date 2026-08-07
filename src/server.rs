@@ -1,9 +1,9 @@
 //! axum HTTP 服务：路由、handler、共享状态。
 //!
-//! 共享状态是 `Arc<RfcConnectionPool>`：单连接 + 自动重连，所有调用串行。
+//! 共享状态是 `Arc<RfcConnectionPool>`：多连接池 + 自动重连。
 //! handler 内通过 `tokio::task::spawn_blocking` 把 FFI 执行丢到阻塞线程池，
-//! 避免长时间 SAP 调用阻塞 tokio 异步运行时（同时让非 Send 的裸指针类型
-//! 只存在于阻塞闭包内，不跨 await 点，保证 future 干净 Send）。
+//! 不同请求可拿到不同连接并行执行 SAP 调用；同时让非 Send 的裸指针类型
+//! 只存在于阻塞闭包内，不跨 await 点，保证 future 干净 Send。
 
 use crate::api::{InvokeRequest, InvokeResponse};
 use crate::error::RfcError;

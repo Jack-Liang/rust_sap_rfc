@@ -11,6 +11,8 @@ pub struct AppConfig {
     pub conn_params: Vec<(&'static str, String)>,
     /// HTTP 监听地址，如 "127.0.0.1:3000"
     pub listen_addr: String,
+    /// SAP 连接池上限（并发 SAP 调用数）
+    pub pool_size: usize,
 }
 
 fn required(key: &str) -> Result<String, String> {
@@ -26,6 +28,11 @@ pub fn load() -> Result<AppConfig, String> {
     let passwd = required("SAP_PASSWD")?;
     let lang = env::var("SAP_LANG").unwrap_or_else(|_| "EN".to_string());
     let listen_addr = env::var("SAP_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+    let pool_size = env::var("SAP_POOL_SIZE")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(8);
 
     // 键为 'static 字面量，值使用环境变量的 String（运行期存活）
     Ok(AppConfig {
@@ -38,6 +45,7 @@ pub fn load() -> Result<AppConfig, String> {
             ("LANG", lang),
         ],
         listen_addr,
+        pool_size,
     })
 }
 
