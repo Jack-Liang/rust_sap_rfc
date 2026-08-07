@@ -96,28 +96,38 @@ async fn agents_handler() -> axum::response::Response {
 }
 
 /// GET / —— 浏览器欢迎页（含 Agent 文档入口 + 接口速览）
-async fn index_handler() -> axum::response::Html<&'static str> {
-    axum::response::Html(
+/// 从请求 Host 头动态推导访问地址，链接自动匹配用户实际访问的 host:port。
+async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::response::Html<String> {
+    // 从 Host 头取访问地址（如 127.0.0.1:3000 或 192.168.1.5:3000）
+    let host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("127.0.0.1:3000");
+    let base = format!("http://{host}");
+    let agents_url = format!("{base}/agents.md");
+
+    let html = format!(
         r#"<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <title>rust-sap-rfc</title>
 <style>
-  body { font: 14px/1.5 -apple-system, "Segoe UI", monospace; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #222; }
-  h1 { font-size: 18px; margin-bottom: 4px; }
-  p.lede { color: #666; margin-top: 0; }
-  h2 { font-size: 14px; margin-top: 28px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
-  code { background: #f4f4f4; padding: 1px 4px; }
-  pre { background: #f4f4f4; padding: 12px; overflow-x: auto; font-size: 12.5px; }
-  table { border-collapse: collapse; }
-  td, th { padding: 4px 12px 4px 0; text-align: left; vertical-align: top; }
-  th { color: #666; font-weight: normal; }
+  body {{ font: 14px/1.5 -apple-system, "Segoe UI", monospace; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #222; }}
+  h1 {{ font-size: 18px; margin-bottom: 4px; }}
+  p.lede {{ color: #666; margin-top: 0; }}
+  h2 {{ font-size: 14px; margin-top: 28px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }}
+  code {{ background: #f4f4f4; padding: 1px 4px; }}
+  pre {{ background: #f4f4f4; padding: 12px; overflow-x: auto; font-size: 12.5px; }}
+  table {{ border-collapse: collapse; }}
+  td, th {{ padding: 4px 12px 4px 0; text-align: left; vertical-align: top; }}
+  th {{ color: #666; font-weight: normal; }}
   /* Agent 文档入口的醒目样式 */
-  .agent-box { background: #f0f7ff; border: 1px solid #d0e3ff; border-radius: 6px; padding: 16px 20px; margin: 24px 0; }
-  .agent-box h2 { margin-top: 0; border: none; color: #0366d6; }
-  .agent-link { font-size: 15px; background: #fff; padding: 8px 12px; border-radius: 4px; display: inline-block; word-break: break-all; }
-  .agent-link code { background: none; color: #0366d6; font-weight: 600; }
+  .agent-box {{ background: #f0f7ff; border: 1px solid #d0e3ff; border-radius: 6px; padding: 16px 20px; margin: 24px 0; }}
+  .agent-box h2 {{ margin-top: 0; border: none; color: #0366d6; }}
+  .agent-link {{ font-size: 15px; background: #fff; padding: 8px 12px; border-radius: 4px; display: inline-block; word-break: break-all; }}
+  .agent-link code {{ background: none; color: #0366d6; font-weight: 600; }}
 </style>
 </head>
 <body>
@@ -127,8 +137,8 @@ async fn index_handler() -> axum::response::Html<&'static str> {
 <div class="agent-box">
   <h2>🤖 给 AI / Agent 用？</h2>
   <p>把这个链接直接粘贴给 Claude / GPT 等 Agent，它就能自主搜索函数、查参数、调 SAP：</p>
-  <p class="agent-link"><code><a href="/agents.md">http://&lt;本机地址&gt;/agents.md</a></code></p>
-  <p style="font-size:12px;color:#666;margin-top:8px">（Agent 读取这份文档后，就知道有哪些端点、怎么调、操作流程。链接地址把 &lt;本机地址&gt; 换成你访问本页的 host:port）</p>
+  <p class="agent-link"><code><a href="/agents.md">{agents_url}</a></code></p>
+  <p style="font-size:12px;color:#666;margin-top:8px">（Agent 读取这份文档后，就知道有哪些端点、怎么调、操作流程）</p>
 </div>
 
 <h2>通用调用</h2>
@@ -139,7 +149,7 @@ async fn index_handler() -> axum::response::Html<&'static str> {
 <h2>面向 AI 的元数据 API</h2>
 <table>
 <tr><th>GET&nbsp;&nbsp;</th><td><code>/api/functions/:name</code></td><td>查函数接口（参数/类型/方向/嵌套字段）</td></tr>
-<tr><th>POST</th><td><code>/api/functions/search</code></td><td>搜索函数模块（body: <code>{"pattern":"BAPI_*"}</code>）</td></tr>
+<tr><th>POST</th><td><code>/api/functions/search</code></td><td>搜索函数模块（body: <code>{{"pattern":"BAPI_*"}}</code>）</td></tr>
 <tr><th>GET&nbsp;&nbsp;</th><td><code>/api/functions/:name/doc</code></td><td>查函数文档（短文本 + SE37 长文档）</td></tr>
 <tr><th>GET&nbsp;&nbsp;</th><td><code>/api/ddic/type/:name</code></td><td>查 DDIC 结构/表字段定义</td></tr>
 <tr><th>GET&nbsp;&nbsp;</th><td><code>/api/ddic/field/:table/:field</code></td><td>查字段语义（数据元素/域/固定值）</td></tr>
@@ -149,18 +159,19 @@ async fn index_handler() -> axum::response::Html<&'static str> {
 <table>
 <tr><th>GET&nbsp;&nbsp;</th><td><code>/</code></td><td>本页面</td></tr>
 <tr><th></th><td><code>/agents.md</code></td><td>AI/Agent 操作文档（Markdown）</td></tr>
-<tr><th></th><td><code>/health</code></td><td>健康检查，返回 <code>{"status":"ok"}</code>（不触碰 SAP）</td></tr>
+<tr><th></th><td><code>/health</code></td><td>健康检查，返回 <code>{{"status":"ok"}}</code>（不触碰 SAP）</td></tr>
 </table>
 
 <h2>连通测试</h2>
-<pre>curl -X POST http://127.0.0.1:3000/api/rfc \
+<pre>curl -X POST {base}/api/rfc \
   -H "Content-Type: application/json" \
-  -d '{"func_name":"STFC_CONNECTION","inputs":{"REQUTEXT":"hi"},"string_outputs":{"ECHOTEXT":255,"RESPTEXT":255}}'</pre>
+  -d '{{"func_name":"STFC_CONNECTION","inputs":{{"REQUTEXT":"hi"}},"string_outputs":{{"ECHOTEXT":255,"RESPTEXT":255}}}}'</pre>
 
 <p>完整字段说明、调用示例、BAPI 速查见项目 <code>README.md</code> / <code>AGENTS.md</code>。</p>
 </body>
-</html>"#,
-    )
+</html>"#
+    );
+    axum::response::Html(html)
 }
 
 /// POST /api/rfc —— 通用 RFC 调用
