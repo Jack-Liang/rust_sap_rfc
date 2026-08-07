@@ -844,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "rust_sap_rfc_demo"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "axum",
  "base64",
