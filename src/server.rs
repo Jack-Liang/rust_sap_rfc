@@ -169,6 +169,7 @@ async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::resp
   -d '{{"func_name":"STFC_CONNECTION","inputs":{{"REQUTEXT":"hi"}},"string_outputs":{{"ECHOTEXT":255,"RESPTEXT":255}}}}'</pre>
 
 <p>完整字段说明、调用示例、BAPI 速查见项目 <code>README.md</code> / <code>AGENTS.md</code>。</p>
+<p style="margin-top:32px;padding-top:16px;border-top:1px solid #eee;color:#666;font-size:12px">项目地址：<a href="https://github.com/Jack-Liang/rust_sap_rfc">github.com/Jack-Liang/rust_sap_rfc</a> · 问题反馈：<a href="https://github.com/Jack-Liang/rust_sap_rfc/issues">Issues</a></p>
 </body>
 </html>"#
     );

@@ -6,6 +6,9 @@
 
 rust_sap_rfc 是一个 **SAP NWRFC → REST 网关**：把 SAP 的 RFC/BAPI 函数暴露为 HTTP 接口。你（AI）通过它能在不安装 SAP 客户端的情况下，搜索、查询、调用 SAP 系统里的函数模块。
 
+- **项目地址**：https://github.com/Jack-Liang/rust_sap_rfc
+- **问题反馈**：https://github.com/Jack-Liang/rust_sap_rfc/issues
+
 服务默认监听 `http://127.0.0.1:3000`（地址可由 `SAP_LISTEN_ADDR` 覆盖）。
 
 ## 你能做什么
