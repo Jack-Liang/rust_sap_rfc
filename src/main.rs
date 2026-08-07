@@ -7,6 +7,7 @@ mod executor;
 mod ffi;
 mod function;
 mod metadata;
+mod openapi;
 mod pool;
 mod server;
 mod server_config;

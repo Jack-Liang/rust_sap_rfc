@@ -23,33 +23,20 @@ pub type SharedPool = Arc<RfcConnectionPool>;
 
 /// 构建带共享连接池的 Router
 pub fn app(pool: SharedPool) -> Router {
+    // 注：原本想用 utoipa 自动生成 OpenAPI spec 在 /openapi.json，但 utoipa 5.x
+    // 在 axum 0.7 下生成 spec 时对递归类型（FieldDef 含 Box<Self>）展开栈溢出。
+    // // utoipa-swagger-ui 在 axum 0.7 下也存在栈溢出 bug。
+    // // 暂时只提供稳定的业务路由。AI/Agent 通过 /agents.md 接入（已含完整端点说明）。
     Router::new()
         .route("/", axum::routing::get(index_handler))
         .route("/agents.md", axum::routing::get(agents_handler))
         .route("/health", axum::routing::get(health_handler))
-        // 通用 RFC 调用
         .route("/api/rfc", post(invoke_handler))
-        // 面向 AI 的元数据查询端点（①~⑤）
-        .route(
-            "/api/functions/search",
-            post(search_functions_handler),
-        )
-        .route(
-            "/api/functions/:name",
-            axum::routing::get(function_interface_handler),
-        )
-        .route(
-            "/api/functions/:name/doc",
-            axum::routing::get(function_doc_handler),
-        )
-        .route(
-            "/api/ddic/type/:name",
-            axum::routing::get(ddic_type_handler),
-        )
-        .route(
-            "/api/ddic/field/:table/:field",
-            axum::routing::get(ddic_field_handler),
-        )
+        .route("/api/functions/search", post(search_functions_handler))
+        .route("/api/functions/:name", axum::routing::get(function_interface_handler))
+        .route("/api/functions/:name/doc", axum::routing::get(function_doc_handler))
+        .route("/api/ddic/type/:name", axum::routing::get(ddic_type_handler))
+        .route("/api/ddic/field/:table/:field", axum::routing::get(ddic_field_handler))
         .with_state(pool)
 }
 
@@ -240,6 +227,17 @@ function copyLink(btn) {{
 ///
 /// 流程：反序列化请求 → spawn_blocking 内通过连接池执行（含自动重连）→ 返回 JSON 结果。
 /// FFI 与连接池内部状态都被限制在阻塞闭包中，绝不跨 await 点。
+/// POST /api/rfc —— 通用 RFC 调用
+#[utoipa::path(
+    post,
+    path = "/api/rfc",
+    tag = "通用调用",
+    request_body = InvokeRequest,
+    responses(
+        (status = 200, description = "调用成功", body = InvokeResponse),
+        (status = 500, description = "调用失败", body = crate::error::ErrorResponse)
+    )
+)]
 async fn invoke_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
     Json(req): Json<InvokeRequest>,
@@ -288,19 +286,19 @@ fn param_info_to_field_def(
     {
         // SAFETY: type_desc_handle 来自刚拉取的有效元数据，连接仍有效
         let subs = unsafe { get_field_infos(p.type_desc_handle.unwrap()) }?;
-        let defs: Vec<FieldDef> = subs
+        let defs: Vec<Box<FieldDef>> = subs
             .iter()
             .map(|sf| {
-                Ok(FieldDef {
+                Box::new(FieldDef {
                     name: sf.name.clone(),
                     type_name: rfctype_name(sf.type_),
                     length: sf.char_length,
                     decimals: sf.decimals,
                     description: sf.parameter_text.clone(),
                     fields: None, // 深度递归由 metadata 缓存负责；此处仅展开一层供 AI 快速预览
-                }) as Result<FieldDef, RfcError>
+                })
             })
-            .collect::<Result<_, _>>()?;
+            .collect::<Vec<_>>();
         Some(defs)
     } else {
         None
@@ -316,6 +314,16 @@ fn param_info_to_field_def(
 }
 
 /// ① GET /api/functions/:name —— 查函数完整接口（参数/类型/方向/嵌套字段）
+#[utoipa::path(
+    get,
+    path = "/api/functions/{name}",
+    tag = "元数据查询",
+    params(("name" = String, Path, description = "函数模块名")),
+    responses(
+        (status = 200, description = "函数接口信息", body = FunctionInterface),
+        (status = 500, description = "查询失败", body = crate::error::ErrorResponse)
+    )
+)]
 async fn function_interface_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -356,8 +364,8 @@ async fn function_interface_handler(
 }
 
 /// ② POST /api/functions/search —— 搜索函数模块
-#[derive(serde::Deserialize)]
-struct SearchRequest {
+#[derive(serde::Deserialize, utoipa::ToSchema)]
+pub(crate) struct SearchRequest {
     /// 函数名通配符，如 "BAPI_USER_*"
     #[serde(default)]
     pattern: String,
@@ -368,6 +376,17 @@ struct SearchRequest {
     #[serde(default)]
     max_results: Option<usize>,
 }
+/// ② POST /api/functions/search —— 搜索函数模块
+#[utoipa::path(
+    post,
+    path = "/api/functions/search",
+    tag = "元数据查询",
+    request_body = SearchRequest,
+    responses(
+        (status = 200, description = "搜索结果", body = SearchResponse),
+        (status = 500, description = "搜索失败", body = crate::error::ErrorResponse)
+    )
+)]
 async fn search_functions_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
     Json(req): Json<SearchRequest>,
@@ -403,6 +422,16 @@ async fn search_functions_handler(
 }
 
 /// ③ GET /api/ddic/type/:name —— 查 DDIC 结构/表的字段定义
+#[utoipa::path(
+    get,
+    path = "/api/ddic/type/{name}",
+    tag = "元数据查询",
+    params(("name" = String, Path, description = "DDIC 结构/表名")),
+    responses(
+        (status = 200, description = "字段定义", body = DdicTypeResponse),
+        (status = 500, description = "查询失败", body = crate::error::ErrorResponse)
+    )
+)]
 async fn ddic_type_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -431,6 +460,20 @@ struct LangQuery {
     #[serde(default)]
     lang: Option<String>,
 }
+/// ④ GET /api/ddic/field/:table/:field —— 查字段的语义元数据（数据元素/域/固定值）
+#[utoipa::path(
+    get,
+    path = "/api/ddic/field/{table}/{field}",
+    tag = "元数据查询",
+    params(
+        ("table" = String, Path, description = "表/结构名"),
+        ("field" = String, Path, description = "字段名")
+    ),
+    responses(
+        (status = 200, description = "字段语义", body = FieldSemanticsResponse),
+        (status = 500, description = "查询失败", body = crate::error::ErrorResponse)
+    )
+)]
 async fn ddic_field_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
     axum::extract::Path((table, field)): axum::extract::Path<(String, String)>,
@@ -469,6 +512,16 @@ async fn ddic_field_handler(
 }
 
 /// ⑤ GET /api/functions/:name/doc —— 查函数文档（短文本 + SE37 长文本 + 参数说明）
+#[utoipa::path(
+    get,
+    path = "/api/functions/{name}/doc",
+    tag = "元数据查询",
+    params(("name" = String, Path, description = "函数模块名")),
+    responses(
+        (status = 200, description = "函数文档", body = FunctionDocResponse),
+        (status = 500, description = "查询失败", body = crate::error::ErrorResponse)
+    )
+)]
 async fn function_doc_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
     axum::extract::Path(name): axum::extract::Path<String>,

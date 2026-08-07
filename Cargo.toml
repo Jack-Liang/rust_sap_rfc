@@ -24,3 +24,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Server 模式：同步 HTTP 客户端（回调线程内调用）+ TOML 配置
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 toml = "0.8"
+# OpenAPI 3.0 spec 生成（/openapi.json 端点）
+utoipa = "5"

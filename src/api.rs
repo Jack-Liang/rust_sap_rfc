@@ -8,17 +8,18 @@ use crate::function::{RfcFunction, RfcRow};
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use utoipa::ToSchema;
 
 /// 显式类型标记：用于 BCD/INT8/Bytes 这些无法靠 JSON 字面量区分的类型。
 /// JSON 形式：`{"type":"BCD","value":"123.45"}`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TypedScalar {
     #[serde(rename = "type")]
     pub kind: TypedScalarKind,
     pub value: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum TypedScalarKind {
     /// BCD packed number，value 为字符串形式的数字（保留小数位）
@@ -42,7 +43,7 @@ pub enum TypedScalarKind {
 ///   - `{"type":"BYTES","value":"QkFTRTY0..."}` → 二进制（Base64）
 ///
 /// 输出（响应 scalars）同样用这个枚举序列化，类型由读取方式决定。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(untagged)]
 pub enum ScalarValue {
     /// 隐式：JSON 字符串。对应 SAP CHAR/NUM/DATE/TIME/BCD(字符串形式)
@@ -131,7 +132,7 @@ enum TypedDecoded {
 /// 字符串输出参数：参数名 -> 可选最大长度。
 /// 长度为 null 时由服务端用函数元数据自动填充；不填键时默认 255。
 /// 为保持向后兼容，也支持直接传整数（旧格式 {"ECHOTEXT": 255}）。
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 #[serde(untagged)]
 pub enum MaxLen {
     /// 旧格式：直接给整数
@@ -151,7 +152,7 @@ impl MaxLen {
 }
 
 /// `POST /api/rfc` 请求体，描述一次任意 RFC/BAPI 调用
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct InvokeRequest {
     /// RFC 函数模块名，如 "BAPI_USER_GETLIST"
     pub func_name: String,
@@ -220,7 +221,7 @@ impl Default for InvokeRequest {
 
 /// 表输出字段规范：`["USERNAME"]` 或 `["USERNAME", 12]`
 /// 用序列化元组实现：第一项必填字段名，第二项可选长度。
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct FieldSpec {
     pub name: String,
     pub max_len: Option<usize>,
@@ -247,7 +248,7 @@ impl FieldSpec {
 }
 
 /// `POST /api/rfc` 响应体
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct InvokeResponse {
     /// 回显调用的函数名
     pub func: String,
@@ -544,7 +545,7 @@ pub fn direction_name(d: i32) -> &'static str {
 }
 
 /// 字段定义（用于函数参数嵌套字段、DDIC 类型字段）
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FieldDef {
     pub name: String,
     #[serde(rename = "type")]
@@ -554,9 +555,10 @@ pub struct FieldDef {
     pub decimals: u32,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub description: String,
-    /// 嵌套结构体/表的子字段（仅 STRUCTURE/TABLE 且有展开时出现）
+    /// 嵌套结构体/表的子字段（仅 STRUCTURE/TABLE 且有展开时出现）。
+    /// 用 Box<FieldDef> 表达递归类型（utoipa 要求递归 schema 必须 Box 化）。
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fields: Option<Vec<FieldDef>>,
+    pub fields: Option<Vec<Box<FieldDef>>>,
 }
 
 /// RFC_DIRECTION 位掩码为 0（字段无方向）时不输出 decimals 的判断函数
@@ -574,7 +576,7 @@ impl FieldDef {
             decimals: f.decimals,
             description: f.description.clone(),
             fields: f.sub_fields.as_ref().map(|subs| {
-                subs.iter().map(FieldDef::from_type_field).collect()
+                subs.iter().map(|s| Box::new(FieldDef::from_type_field(s))).collect()
             }),
         }
     }
@@ -582,7 +584,7 @@ impl FieldDef {
 
 // --- 端点① GET /api/functions/{name} ---
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FunctionParam {
     pub name: String,
     #[serde(rename = "type")]
@@ -596,11 +598,12 @@ pub struct FunctionParam {
     pub default: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// 嵌套结构体/表子字段（用 Box<FieldDef> 表达递归）
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fields: Option<Vec<FieldDef>>,
+    pub fields: Option<Vec<Box<FieldDef>>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FunctionInterface {
     pub name: String,
     pub params: Vec<FunctionParam>,
@@ -608,7 +611,7 @@ pub struct FunctionInterface {
 
 // --- 端点② POST /api/functions/search ---
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SearchFunctionEntry {
     pub name: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -617,7 +620,7 @@ pub struct SearchFunctionEntry {
     pub description: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SearchResponse {
     pub pattern: String,
     pub count: usize,
@@ -626,7 +629,7 @@ pub struct SearchResponse {
 
 // --- 端点③ GET /api/ddic/type/{name} ---
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DdicTypeResponse {
     pub name: String,
     pub fields: Vec<FieldDef>,
@@ -634,13 +637,13 @@ pub struct DdicTypeResponse {
 
 // --- 端点④ GET /api/ddic/field/{table}/{field} ---
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FixedValueDto {
     pub value: String,
     pub text: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FieldSemanticsResponse {
     pub table: String,
     pub field: String,
@@ -660,13 +663,13 @@ pub struct FieldSemanticsResponse {
 
 // --- 端点⑤ GET /api/functions/{name}/doc ---
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ParamDoc {
     pub name: String,
     pub text: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FunctionDocResponse {
     pub name: String,
     #[serde(skip_serializing_if = "String::is_empty")]

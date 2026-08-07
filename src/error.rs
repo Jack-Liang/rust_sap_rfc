@@ -21,16 +21,16 @@ impl fmt::Display for RfcError {
 impl std::error::Error for RfcError {}
 
 /// 让 RfcError 可作为 handler 返回值，自动序列化为 500 + JSON 错误体
-#[derive(Serialize)]
-struct ErrorResponse {
-    error: ErrorBody,
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct ErrorResponse {
+    pub error: ErrorBody,
 }
 
-#[derive(Serialize)]
-struct ErrorBody {
-    code: i32,
-    key: String,
-    message: String,
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct ErrorBody {
+    pub code: i32,
+    pub key: String,
+    pub message: String,
 }
 
 impl IntoResponse for RfcError {
