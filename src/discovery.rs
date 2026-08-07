@@ -218,16 +218,13 @@ pub struct FunctionDoc {
 }
 
 /// 读取函数模块的 SE37 长文档。
-/// 内部调用 ABAP RFC `DOCU_GET_WITH_RFC`（DOCU_GET 的 RFC 版本，兼容性最好）。
+/// 内部调用 ABAP 函数 `DOCU_GET`（SAP 标准文档读取，组 SDOC）。
 /// 文档对象约定：
 ///   - OBJECT = 函数名
 ///   - ID = "FU"（Function Module 文档类）
-///   - TYP = "E"（General documentation）
 ///   - LANGU = lang
-///   - DESTINATION = "NONE"（本地系统）
 ///
-/// 并非所有函数都有文档（返回 ERRORTYPE≠0 或空 DOKLINE）；读取失败时
-/// 返回空 long_text + warning，不报错。
+/// 并非所有函数都有文档；无文档时返回空 long_text（不报错）。
 pub fn read_function_doc(
     conn: &RfcConnection,
     func_name: &str,
@@ -235,21 +232,19 @@ pub fn read_function_doc(
     short_text: &str,
 ) -> Result<FunctionDoc, RfcError> {
     let req = InvokeRequest {
-        func_name: "DOCU_GET_WITH_RFC".to_string(),
+        func_name: "DOCU_GET".to_string(),
         inputs: HashMap::from([
             ("OBJECT".to_string(), ScalarValue::Chars(func_name.to_uppercase())),
             ("ID".to_string(), ScalarValue::Chars("FU".to_string())),
-            ("TYP".to_string(), ScalarValue::Chars("E".to_string())),
             ("LANGU".to_string(), ScalarValue::Chars(lang.to_string())),
-            ("DESTINATION".to_string(), ScalarValue::Chars("NONE".to_string())),
         ]),
-        table_outputs: HashMap::from([("DOKLINE".to_string(), text_lines_spec())]),
+        table_outputs: HashMap::from([("LINE".to_string(), text_lines_spec())]),
         ..Default::default()
     };
 
     match execute_collect(conn, &req) {
         Ok(resp) => {
-            let lines = resp.tables.get("DOKLINE").cloned().unwrap_or_default();
+            let lines = resp.tables.get("LINE").cloned().unwrap_or_default();
             // TLINE 结构：TDFORMAT(2) + TDLINE(132)，拼接所有 TDLINE 成完整文档
             let long_text = lines
                 .iter()
@@ -269,13 +264,13 @@ pub fn read_function_doc(
                 name: func_name.to_string(),
                 short_text: short_text.to_string(),
                 long_text: String::new(),
-                warning: Some(format!("读取长文档失败（可能无文档或 DOCU_GET_WITH_RFC 不可用）: {}", e.message)),
+                warning: Some(format!("读取长文档失败（可能无文档或 DOCU_GET 不可用）: {}", e.message)),
             })
         }
     }
 }
 
-/// DOCU_GET_WITH_RFC 输出 DOKLINE 表（TLINE 结构）的字段规格
+/// DOCU_GET 输出 LINE 表（TLINE 结构）的字段规格
 fn text_lines_spec() -> Vec<FieldSpec> {
     vec![
         FieldSpec {
