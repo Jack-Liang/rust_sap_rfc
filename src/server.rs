@@ -14,6 +14,7 @@ use crate::connection::get_field_infos;
 use crate::error::RfcError;
 use crate::executor::execute_collect;
 use crate::pool::RfcConnectionPool;
+use axum::response::IntoResponse;
 use axum::{routing::post, Json, Router};
 use std::sync::Arc;
 
@@ -24,6 +25,7 @@ pub type SharedPool = Arc<RfcConnectionPool>;
 pub fn app(pool: SharedPool) -> Router {
     Router::new()
         .route("/", axum::routing::get(index_handler))
+        .route("/agents.md", axum::routing::get(agents_handler))
         .route("/health", axum::routing::get(health_handler))
         // 通用 RFC 调用
         .route("/api/rfc", post(invoke_handler))
@@ -60,13 +62,19 @@ pub async fn run(
 ) -> Result<(), std::io::Error> {
     let listener = tokio::net::TcpListener::bind(listen_addr).await?;
     tracing::info!(addr = listen_addr, "HTTP 服务监听");
-    tracing::info!("  - POST /api/rfc                  通用 RFC 调用");
-    tracing::info!("  - GET  /api/functions/:name      查函数接口(参数/类型/方向)");
-    tracing::info!("  - POST /api/functions/search     搜索函数模块");
-    tracing::info!("  - GET  /api/functions/:name/doc  查函数文档");
-    tracing::info!("  - GET  /api/ddic/type/:name      查 DDIC 类型字段");
-    tracing::info!("  - GET  /api/ddic/field/:t/:f     查字段语义元数据");
-    tracing::info!("  - GET  /health                   健康检查");
+    // listen_addr 可能是 0.0.0.0:3000，给用户提示时用 127.0.0.1 更友好（本机访问）
+    let display_host = if listen_addr.starts_with("0.0.0.0") {
+        listen_addr.replacen("0.0.0.0", "127.0.0.1", 1)
+    } else if listen_addr.starts_with("::") {
+        listen_addr.replacen("::", "[::1]", 1)
+    } else {
+        listen_addr.to_string()
+    };
+    tracing::info!("✅ 服务就绪！");
+    tracing::info!("   👉 浏览器打开:         http://{}", display_host);
+    tracing::info!("   👉 给 AI/Agent 的文档: http://{}/agents.md", display_host);
+    tracing::info!("   端点速览: POST /api/rfc | GET /api/functions/:name | POST /api/functions/search");
+    tracing::info!("           GET /api/functions/:name/doc | GET /api/ddic/type/:name | GET /api/ddic/field/:t/:f");
     axum::serve(listener, app(pool))
         .with_graceful_shutdown(shutdown)
         .await
@@ -77,7 +85,17 @@ async fn health_handler() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok" }))
 }
 
-/// GET / —— 浏览器欢迎页（无 AI 风格：纯文本、内联最简样式）
+/// GET /agents.md —— 返回嵌入的 AGENTS.md（供 AI/Agent 读取）
+/// 编译期 include_str! 嵌入，预编译包也自带，不依赖磁盘文件。
+async fn agents_handler() -> axum::response::Response {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+        include_str!("../AGENTS.md"),
+    )
+        .into_response()
+}
+
+/// GET / —— 浏览器欢迎页（含 Agent 文档入口 + 接口速览）
 async fn index_handler() -> axum::response::Html<&'static str> {
     axum::response::Html(
         r#"<!doctype html>
@@ -95,22 +113,34 @@ async fn index_handler() -> axum::response::Html<&'static str> {
   table { border-collapse: collapse; }
   td, th { padding: 4px 12px 4px 0; text-align: left; vertical-align: top; }
   th { color: #666; font-weight: normal; }
+  /* Agent 文档入口的醒目样式 */
+  .agent-box { background: #f0f7ff; border: 1px solid #d0e3ff; border-radius: 6px; padding: 16px 20px; margin: 24px 0; }
+  .agent-box h2 { margin-top: 0; border: none; color: #0366d6; }
+  .agent-link { font-size: 15px; background: #fff; padding: 8px 12px; border-radius: 4px; display: inline-block; word-break: break-all; }
+  .agent-link code { background: none; color: #0366d6; font-weight: 600; }
 </style>
 </head>
 <body>
 <h1>rust-sap-rfc</h1>
 <p class="lede">SAP NWRFC → REST 网关服务。POST /api/rfc 调用任意 BAPI，5 个元数据端点供 AI 自主探索。</p>
 
+<div class="agent-box">
+  <h2>🤖 给 AI / Agent 用？</h2>
+  <p>把这个链接直接粘贴给 Claude / GPT 等 Agent，它就能自主搜索函数、查参数、调 SAP：</p>
+  <p class="agent-link"><code><a href="/agents.md">http://&lt;本机地址&gt;/agents.md</a></code></p>
+  <p style="font-size:12px;color:#666;margin-top:8px">（Agent 读取这份文档后，就知道有哪些端点、怎么调、操作流程。链接地址把 &lt;本机地址&gt; 换成你访问本页的 host:port）</p>
+</div>
+
 <h2>通用调用</h2>
 <table>
-<tr><th>POST</th><td><code>/api/rfc</code></td><td>通用 RFC 调用，详见 README §5</td></tr>
+<tr><th>POST</th><td><code>/api/rfc</code></td><td>通用 RFC 调用（见下方连通测试示例）</td></tr>
 </table>
 
 <h2>面向 AI 的元数据 API</h2>
 <table>
 <tr><th>GET&nbsp;&nbsp;</th><td><code>/api/functions/:name</code></td><td>查函数接口（参数/类型/方向/嵌套字段）</td></tr>
 <tr><th>POST</th><td><code>/api/functions/search</code></td><td>搜索函数模块（body: <code>{"pattern":"BAPI_*"}</code>）</td></tr>
-<tr><th>GET&nbsp;&nbsp;</th><td><code>/api/functions/:name/doc</code></td><td>查函数文档（短文本 + SE37 长文本）</td></tr>
+<tr><th>GET&nbsp;&nbsp;</th><td><code>/api/functions/:name/doc</code></td><td>查函数文档（短文本 + SE37 长文档）</td></tr>
 <tr><th>GET&nbsp;&nbsp;</th><td><code>/api/ddic/type/:name</code></td><td>查 DDIC 结构/表字段定义</td></tr>
 <tr><th>GET&nbsp;&nbsp;</th><td><code>/api/ddic/field/:table/:field</code></td><td>查字段语义（数据元素/域/固定值）</td></tr>
 </table>
@@ -118,6 +148,7 @@ async fn index_handler() -> axum::response::Html<&'static str> {
 <h2>其他</h2>
 <table>
 <tr><th>GET&nbsp;&nbsp;</th><td><code>/</code></td><td>本页面</td></tr>
+<tr><th></th><td><code>/agents.md</code></td><td>AI/Agent 操作文档（Markdown）</td></tr>
 <tr><th></th><td><code>/health</code></td><td>健康检查，返回 <code>{"status":"ok"}</code>（不触碰 SAP）</td></tr>
 </table>
 
@@ -126,7 +157,7 @@ async fn index_handler() -> axum::response::Html<&'static str> {
   -H "Content-Type: application/json" \
   -d '{"func_name":"STFC_CONNECTION","inputs":{"REQUTEXT":"hi"},"string_outputs":{"ECHOTEXT":255,"RESPTEXT":255}}'</pre>
 
-<p>更多字段说明、调用示例、BAPI 速查见项目 <code>README.md</code>。</p>
+<p>完整字段说明、调用示例、BAPI 速查见项目 <code>README.md</code> / <code>AGENTS.md</code>。</p>
 </body>
 </html>"#,
     )
