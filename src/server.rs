@@ -112,64 +112,103 @@ async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::resp
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>rust-sap-rfc</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rust-sap-rfc · SAP NWRFC REST 网关</title>
 <style>
-  body {{ font: 14px/1.5 -apple-system, "Segoe UI", monospace; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #222; }}
-  h1 {{ font-size: 18px; margin-bottom: 4px; }}
-  p.lede {{ color: #666; margin-top: 0; }}
-  h2 {{ font-size: 14px; margin-top: 28px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }}
-  code {{ background: #f4f4f4; padding: 1px 4px; }}
-  pre {{ background: #f4f4f4; padding: 12px; overflow-x: auto; font-size: 12.5px; }}
-  table {{ border-collapse: collapse; }}
-  td, th {{ padding: 4px 12px 4px 0; text-align: left; vertical-align: top; }}
-  th {{ color: #666; font-weight: normal; }}
-  /* Agent 文档入口的醒目样式 */
-  .agent-box {{ background: #f0f7ff; border: 1px solid #d0e3ff; border-radius: 6px; padding: 16px 20px; margin: 24px 0; }}
-  .agent-box h2 {{ margin-top: 0; border: none; color: #0366d6; display: flex; align-items: center; gap: 8px; }}
-  .ai-icon {{ vertical-align: middle; flex-shrink: 0; }}
-  .agent-link {{ font-size: 15px; background: #fff; padding: 8px 12px; border-radius: 4px; display: inline-block; word-break: break-all; }}
-  .agent-link code {{ background: none; color: #0366d6; font-weight: 600; }}
+  * {{ box-sizing: border-box; }}
+  body {{ font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 820px; margin: 0 auto; padding: 40px 20px 60px; color: #1f2328; background: #fafbfc; }}
+  a {{ color: #0969da; text-decoration: none; }}
+  a:hover {{ text-decoration: underline; }}
+  code {{ font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; background: #eff1f3; padding: 2px 6px; border-radius: 4px; }}
+  pre {{ background: #161b22; color: #e6edf3; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; line-height: 1.5; }}
+  pre code {{ background: none; color: inherit; padding: 0; }}
+
+  /* Hero */
+  .hero {{ background: #fff; border: 1px solid #d0d7de; border-radius: 12px; padding: 32px; margin-bottom: 24px; }}
+  .hero h1 {{ margin: 0 0 8px; font-size: 26px; font-weight: 700; }}
+  .hero .lede {{ margin: 0 0 4px; color: #57606a; font-size: 15px; }}
+
+  /* Agent 卡片 */
+  .agent {{ background: linear-gradient(135deg, #ddf4ff 0%, #dafbe1 100%); border: 1px solid #54aeff; border-radius: 12px; padding: 24px; margin-bottom: 32px; }}
+  .agent-title {{ display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 700; color: #0969da; margin: 0 0 8px; }}
+  .agent-title svg {{ flex-shrink: 0; }}
+  .agent p {{ margin: 8px 0; color: #1f2328; }}
+  .agent-url {{ display: inline-block; background: #fff; border: 1px solid #54aeff; padding: 10px 16px; border-radius: 8px; font-family: monospace; font-size: 14px; font-weight: 600; word-break: break-all; }}
+  .agent-url a {{ color: #0969da; }}
+  .agent .hint {{ font-size: 13px; color: #57606a; }}
+
+  /* 章节标题 */
+  h2.section {{ font-size: 14px; font-weight: 600; color: #57606a; text-transform: uppercase; letter-spacing: 0.5px; margin: 36px 0 12px; }}
+
+  /* 端点卡片网格 */
+  .grid {{ display: grid; grid-template-columns: 1fr; gap: 10px; }}
+  .ep {{ display: flex; align-items: center; gap: 12px; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 12px 16px; transition: box-shadow .15s; }}
+  .ep:hover {{ box-shadow: 0 1px 6px rgba(0,0,0,.08); }}
+  .method {{ display: inline-block; min-width: 48px; text-align: center; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 4px; flex-shrink: 0; }}
+  .m-get {{ background: #dafbe1; color: #1a7f37; border: 1px solid #4ac26b; }}
+  .m-post {{ background: #ddf4ff; color: #0969da; border: 1px solid #54aeff; }}
+  .ep code {{ background: none; padding: 0; font-size: 13px; font-weight: 500; color: #24292f; }}
+  .ep .desc {{ margin-left: auto; font-size: 13px; color: #57606a; text-align: right; }}
+
+  footer {{ margin-top: 40px; padding-top: 20px; border-top: 1px solid #d0d7de; font-size: 13px; color: #57606a; }}
+  footer a {{ margin-right: 16px; }}
+
+  @media (max-width: 600px) {{
+    .ep {{ flex-wrap: wrap; }}
+    .ep .desc {{ margin-left: 0; width: 100%; text-align: left; color: #8c959f; font-size: 12px; }}
+    .hero h1 {{ font-size: 22px; }}
+  }}
 </style>
 </head>
 <body>
-<h1>rust-sap-rfc</h1>
-<p class="lede">SAP NWRFC → REST 网关服务。POST /api/rfc 调用任意 BAPI，5 个元数据端点供 AI 自主探索。</p>
 
-<div class="agent-box">
-  <h2><svg class="ai-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg> 给 AI / Agent 用？</h2>
-  <p>把这个链接直接粘贴给 Claude / GPT 等 Agent，它就能自主搜索函数、查参数、调 SAP：</p>
-  <p class="agent-link"><code><a href="/agents.md">{agents_url}</a></code></p>
-  <p style="font-size:12px;color:#666;margin-top:8px">（Agent 读取这份文档后，就知道有哪些端点、怎么调、操作流程）</p>
+<div class="hero">
+  <h1>rust-sap-rfc</h1>
+  <p class="lede">SAP NWRFC → REST 网关服务 · 一个端点调用任意 BAPI，5 个元数据端点供 AI 自主探索</p>
 </div>
 
-<h2>通用调用</h2>
-<table>
-<tr><th>POST</th><td><code>/api/rfc</code></td><td>通用 RFC 调用（见下方连通测试示例）</td></tr>
-</table>
+<div class="agent">
+  <div class="agent-title">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg>
+    给 AI / Agent 用？
+  </div>
+  <p>把这个链接直接粘贴给 Claude / GPT 等 Agent，它就能自主搜索函数、查参数、调 SAP：</p>
+  <p><span class="agent-url"><a href="/agents.md">{agents_url}</a></span></p>
+  <p class="hint">Agent 读取这份文档后，就知道有哪些端点、怎么调、操作流程</p>
+</div>
 
-<h2>面向 AI 的元数据 API</h2>
-<table>
-<tr><th>GET&nbsp;&nbsp;</th><td><code>/api/functions/:name</code></td><td>查函数接口（参数/类型/方向/嵌套字段）</td></tr>
-<tr><th>POST</th><td><code>/api/functions/search</code></td><td>搜索函数模块（body: <code>{{"pattern":"BAPI_*"}}</code>）</td></tr>
-<tr><th>GET&nbsp;&nbsp;</th><td><code>/api/functions/:name/doc</code></td><td>查函数文档（短文本 + SE37 长文档）</td></tr>
-<tr><th>GET&nbsp;&nbsp;</th><td><code>/api/ddic/type/:name</code></td><td>查 DDIC 结构/表字段定义</td></tr>
-<tr><th>GET&nbsp;&nbsp;</th><td><code>/api/ddic/field/:table/:field</code></td><td>查字段语义（数据元素/域/固定值）</td></tr>
-</table>
+<h2 class="section">通用调用</h2>
+<div class="grid">
+  <div class="ep"><span class="method m-post">POST</span><code>/api/rfc</code><span class="desc">通用 RFC 调用</span></div>
+</div>
 
-<h2>其他</h2>
-<table>
-<tr><th>GET&nbsp;&nbsp;</th><td><code>/</code></td><td>本页面</td></tr>
-<tr><th></th><td><code>/agents.md</code></td><td>AI/Agent 操作文档（Markdown）</td></tr>
-<tr><th></th><td><code>/health</code></td><td>健康检查，返回 <code>{{"status":"ok"}}</code>（不触碰 SAP）</td></tr>
-</table>
+<h2 class="section">面向 AI 的元数据 API</h2>
+<div class="grid">
+  <div class="ep"><span class="method m-get">GET</span><code>/api/functions/&#123;name&#125;</code><span class="desc">查函数接口（参数/类型/嵌套字段）</span></div>
+  <div class="ep"><span class="method m-post">POST</span><code>/api/functions/search</code><span class="desc">搜索函数模块</span></div>
+  <div class="ep"><span class="method m-get">GET</span><code>/api/functions/&#123;name&#125;/doc</code><span class="desc">查函数文档（短文本 + SE37 长文档）</span></div>
+  <div class="ep"><span class="method m-get">GET</span><code>/api/ddic/type/&#123;name&#125;</code><span class="desc">查 DDIC 结构/表字段定义</span></div>
+  <div class="ep"><span class="method m-get">GET</span><code>/api/ddic/field/&#123;table&#125;/&#123;field&#125;</code><span class="desc">查字段语义（数据元素/域/固定值）</span></div>
+</div>
 
-<h2>连通测试</h2>
-<pre>curl -X POST {base}/api/rfc \
+<h2 class="section">其他端点</h2>
+<div class="grid">
+  <div class="ep"><span class="method m-get">GET</span><code>/</code><span class="desc">本页面</span></div>
+  <div class="ep"><span class="method m-get">GET</span><code>/agents.md</code><span class="desc">AI/Agent 操作文档</span></div>
+  <div class="ep"><span class="method m-get">GET</span><code>/health</code><span class="desc">健康检查（不触碰 SAP）</span></div>
+</div>
+
+<h2 class="section">连通测试</h2>
+<pre><code>curl -X POST {base}/api/rfc \
   -H "Content-Type: application/json" \
-  -d '{{"func_name":"STFC_CONNECTION","inputs":{{"REQUTEXT":"hi"}},"string_outputs":{{"ECHOTEXT":255,"RESPTEXT":255}}}}'</pre>
+  -d '{{"func_name":"STFC_CONNECTION","inputs":{{"REQUTEXT":"hi"}},"string_outputs":{{"ECHOTEXT":255,"RESPTEXT":255}}}}'</code></pre>
 
-<p>完整字段说明、调用示例、BAPI 速查见项目 <code>README.md</code> / <code>AGENTS.md</code>。</p>
-<p style="margin-top:32px;padding-top:16px;border-top:1px solid #eee;color:#666;font-size:12px">项目地址：<a href="https://github.com/Jack-Liang/rust_sap_rfc">github.com/Jack-Liang/rust_sap_rfc</a> · 问题反馈：<a href="https://github.com/Jack-Liang/rust_sap_rfc/issues">Issues</a></p>
+<footer>
+  <a href="https://github.com/Jack-Liang/rust_sap_rfc">项目源码</a>
+  <a href="https://github.com/Jack-Liang/rust_sap_rfc/issues">问题反馈</a>
+  <span style="float:right">完整文档见 <code>README.md</code> / <code>AGENTS.md</code></span>
+</footer>
+
 </body>
 </html>"#
     );
