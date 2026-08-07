@@ -414,13 +414,17 @@ curl 'http://127.0.0.1:3000/api/functions/BAPI_USER_GET_DETAIL/doc?lang=ZH'
 
 > 并非所有函数都有 SE37 长文档。无文档时 `long_text` 为空，`warning` 字段提示原因，不报错。
 
+> ⚠️ **长文档依赖 `RFC_READ_TEXT`**：少数精简/定制 SAP 系统可能未启用 `RFC_READ_TEXT`（非 remote-enabled）。此时 `long_text` 为空并在 `warning` 提示，但 `short_text` 和 `parameter_docs` 仍可用（来自 C API 参数描述，不依赖 RFC_READ_TEXT）。参数描述对 AI 理解如何传参通常已足够。
+
 ### 5.3.4 `GET /api/ddic/type/:name` — 查 DDIC 结构/表字段
 
 给定表名/结构名（如 `MARA`、`BAPIRETURN`），返回所有字段定义（内部用 C API `RfcGetTypeDesc`，高效）。
 
 ```bash
-curl http://127.0.0.1:3000/api/ddic/type/MARA
+curl http://127.0.0.1:3000/api/ddic/type/BAPIRET2
 ```
+
+> ⚠️ **透明表 vs 结构**：此端点对 DDIC **结构**（如 `BAPIRET2`、`BAPIRETURN`）普遍可用；对**透明表**（如 `MARA`）是否支持取决于目标 SAP 系统的 DDIC 配置——部分系统会对透明表返回 `NOT_FOUND`。透明表若不可用，改用端点④的 `DDIF_FIELDINFO_GET`（支持更广），或直接调 `POST /api/rfc` 用 `RFC_FUNCTION_SEARCH` 间接探查。
 
 响应：
 ```json

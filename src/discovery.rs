@@ -130,15 +130,13 @@ pub fn read_ddic_field_info(
         func_name: "DDIF_FIELDINFO_GET".to_string(),
         inputs: HashMap::from([
             ("TABNAME".to_string(), ScalarValue::Chars(table.to_uppercase())),
-            ("FIELDNAME".to_string(), ScalarValue::Chars(field.to_uppercase())),
+            // 注意：查结构单字段必须用 LFIELDNAME 而非 FIELDNAME（后者对结构无效）
+            ("LFIELDNAME".to_string(), ScalarValue::Chars(field.to_uppercase())),
             ("LANGU".to_string(), ScalarValue::Chars(lang.to_string())),
             ("ALL_TYPES".to_string(), ScalarValue::Chars("X".to_string())),
         ]),
-        // DFIES 是结构体输出（单字段语义），FIXED_VALUES 是表输出（固定值列表）
-        struct_outputs: HashMap::from([(
-            "FIELDINFO".to_string(),
-            dfies_field_spec(),
-        )]),
+        // DFIES_WA 是 EXPORT 结构体（单字段语义），FIXED_VALUES 是 TABLES（固定值列表）
+        struct_outputs: HashMap::from([("DFIES_WA".to_string(), dfies_field_spec())]),
         table_outputs: HashMap::from([(
             "FIXED_VALUES".to_string(),
             fixed_values_spec(),
@@ -147,7 +145,7 @@ pub fn read_ddic_field_info(
     };
 
     let resp = execute_collect(conn, &req)?;
-    let dfies = resp.structs.get("FIELDINFO").cloned().unwrap_or_default();
+    let dfies = resp.structs.get("DFIES_WA").cloned().unwrap_or_default();
 
     let fixed_values = resp
         .tables
