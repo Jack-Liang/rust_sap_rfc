@@ -125,7 +125,8 @@ async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::resp
   th {{ color: #666; font-weight: normal; }}
   /* Agent 文档入口的醒目样式 */
   .agent-box {{ background: #f0f7ff; border: 1px solid #d0e3ff; border-radius: 6px; padding: 16px 20px; margin: 24px 0; }}
-  .agent-box h2 {{ margin-top: 0; border: none; color: #0366d6; }}
+  .agent-box h2 {{ margin-top: 0; border: none; color: #0366d6; display: flex; align-items: center; gap: 8px; }}
+  .ai-icon {{ vertical-align: middle; flex-shrink: 0; }}
   .agent-link {{ font-size: 15px; background: #fff; padding: 8px 12px; border-radius: 4px; display: inline-block; word-break: break-all; }}
   .agent-link code {{ background: none; color: #0366d6; font-weight: 600; }}
 </style>
@@ -135,7 +136,7 @@ async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::resp
 <p class="lede">SAP NWRFC → REST 网关服务。POST /api/rfc 调用任意 BAPI，5 个元数据端点供 AI 自主探索。</p>
 
 <div class="agent-box">
-  <h2>🤖 给 AI / Agent 用？</h2>
+  <h2><svg class="ai-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg> 给 AI / Agent 用？</h2>
   <p>把这个链接直接粘贴给 Claude / GPT 等 Agent，它就能自主搜索函数、查参数、调 SAP：</p>
   <p class="agent-link"><code><a href="/agents.md">{agents_url}</a></code></p>
   <p style="font-size:12px;color:#666;margin-top:8px">（Agent 读取这份文档后，就知道有哪些端点、怎么调、操作流程）</p>
