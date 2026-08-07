@@ -133,8 +133,12 @@ async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::resp
   .agent-title {{ display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 700; color: #0969da; margin: 0 0 8px; }}
   .agent-title svg {{ flex-shrink: 0; }}
   .agent p {{ margin: 8px 0; color: #1f2328; }}
-  .agent-url {{ display: inline-block; background: #fff; border: 1px solid #54aeff; padding: 10px 16px; border-radius: 8px; font-family: monospace; font-size: 14px; font-weight: 600; word-break: break-all; }}
+  .agent-url {{ display: inline-flex; align-items: center; gap: 8px; background: #fff; border: 1px solid #54aeff; padding: 8px 8px 8px 16px; border-radius: 8px; font-family: monospace; font-size: 14px; font-weight: 600; word-break: break-all; }}
   .agent-url a {{ color: #0969da; }}
+  .copy-btn {{ flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; background: #0969da; color: #fff; border: none; border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background .15s; }}
+  .copy-btn:hover {{ background: #0860c9; }}
+  .copy-btn.copied {{ background: #1a7f37; }}
+  .copy-btn svg {{ width: 14px; height: 14px; }}
   .agent .hint {{ font-size: 13px; color: #57606a; }}
 
   /* 章节标题 */
@@ -173,7 +177,7 @@ async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::resp
     给 AI / Agent 用？
   </div>
   <p>把这个链接直接粘贴给 Claude / GPT 等 Agent，它就能自主搜索函数、查参数、调 SAP：</p>
-  <p><span class="agent-url"><a href="/agents.md">{agents_url}</a></span></p>
+  <p><span class="agent-url"><a href="/agents.md" id="agent-link">{agents_url}</a><button class="copy-btn" onclick="copyLink(this)" title="复制链接"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制</button></span></p>
   <p class="hint">Agent 读取这份文档后，就知道有哪些端点、怎么调、操作流程</p>
 </div>
 
@@ -208,6 +212,23 @@ async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::resp
   <a href="https://github.com/Jack-Liang/rust_sap_rfc/issues">问题反馈</a>
   <span style="float:right">完整文档见 <code>README.md</code> / <code>AGENTS.md</code></span>
 </footer>
+
+<script>
+function copyLink(btn) {{
+  const url = document.getElementById('agent-link').href;
+  navigator.clipboard.writeText(url).then(function() {{
+    const orig = btn.innerHTML;
+    btn.classList.add('copied');
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>已复制';
+    setTimeout(function() {{ btn.classList.remove('copied'); btn.innerHTML = orig; }}, 2000);
+  }}).catch(function() {{
+    // clipboard API 不可用（如非 HTTPS/localhost），降级选中文本让用户 Cmd+C
+    const range = document.createRange(); range.selectNode(document.getElementById('agent-link'));
+    window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+    btn.textContent = '已选中，按 Cmd/Ctrl+C';
+  }});
+}}
+</script>
 
 </body>
 </html>"#
