@@ -38,27 +38,38 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             archive: tar.gz
-            binary: rust_sap_rfc
+            binary: rust_sap_rfc_demo
             platform_dir: linux-x86_64
             lib_name: libsapnwrfc.so
+            cc: cc
+            cross_compile: false
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             archive: tar.gz
-            binary: rust_sap_rfc
+            binary: rust_sap_rfc_demo
             platform_dir: linux-aarch64
             lib_name: libsapnwrfc.so
+            cc: aarch64-linux-gnu-gcc
+            cross_compile: true
+            linker: aarch64-linux-gnu-gcc
           - target: x86_64-apple-darwin
             runner: macos-latest
             archive: tar.gz
-            binary: rust_sap_rfc
+            binary: rust_sap_rfc_demo
             platform_dir: darwin-x86_64
             lib_name: libsapnwrfc.dylib
+            cc: cc
+            cross_compile: false
+            mac_target: x86_64
           - target: aarch64-apple-darwin
             runner: macos-latest
             archive: tar.gz
-            binary: rust_sap_rfc
+            binary: rust_sap_rfc_demo
             platform_dir: darwin-aarch64
             lib_name: libsapnwrfc.dylib
+            cc: cc
+            cross_compile: false
+            mac_target: arm64
           # Windows：受限于 stub .lib 不能可靠通过 MSVC link，由维护者本地手工构建并上传
           # 详见 README §「下载预编译二进制」
           # - target: x86_64-pc-windows-msvc
@@ -74,6 +85,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # 安装 Linux aarch64 交叉编译工具链（gcc + linker）
+      - name: Install aarch64 cross-toolchain (Linux only)
+        if: matrix.cross_compile == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libc6-dev-arm64-cross
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -87,16 +108,44 @@ jobs:
       # 生成 build.rs 所需的「含库文件的目录」占位
       # 真正的 SAP SDK 受版权限制不能下载，链接期 link 不到符号；
       # 但 Cargo 的 `dylib=sapnwrfc` 模式允许编译期不解析符号（运行时才查），
-      # 因此只需让 build.rs 看到目录里有「库文件」即可。
+      # 因此只需让 build.rs 看到目录里有「匹配目标架构的库文件」即可。
       - name: Prepare stub SDK (Linux/macOS)
         shell: bash
+        env:
+          # macOS 交叉编译用 -arch，Linux 交叉编译用交叉编译器前缀
+          CC_FOR_STUB: ${{ matrix.cc }}
+          MAC_TARGET: ${{ matrix.mac_target }}
         run: |
           STUB=nwrfcsdk/lib/${{ matrix.platform_dir }}
           mkdir -p "$STUB"
           echo "int sapnwrfc_stub;" > /tmp/stub.c
-          ${CC:-cc} -c /tmp/stub.c -o /tmp/stub.o
-          ${CC:-cc} -shared -o "$STUB/${{ matrix.lib_name }}" /tmp/stub.o
+          if [[ "${{ runner.os }}" == "macOS" && -n "$MAC_TARGET" ]]; then
+            # macOS：通过 -arch 指定目标架构（x86_64 或 arm64）
+            "$CC_FOR_STUB" -arch "$MAC_TARGET" -c /tmp/stub.c -o /tmp/stub.o
+            "$CC_FOR_STUB" -arch "$MAC_TARGET" -shared -o "$STUB/${{ matrix.lib_name }}" /tmp/stub.o
+          else
+            # Linux：直接用 CC（本机 cc 或 aarch64-linux-gnu-gcc）
+            "$CC_FOR_STUB" -c /tmp/stub.c -o /tmp/stub.o
+            "$CC_FOR_STUB" -shared -o "$STUB/${{ matrix.lib_name }}" /tmp/stub.o
+          fi
           ls -la "$STUB"
+          # 验证生成的库文件架构是否正确
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            file "$STUB/${{ matrix.lib_name }}"
+          else
+            file "$STUB/${{ matrix.lib_name }}" || true
+          fi
+
+      # 交叉编译时配置 cargo 使用正确的 linker
+      - name: Set cargo linker for cross-compile
+        if: matrix.cross_compile == true
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<EOF
+          [target.${{ matrix.target }}]
+          linker = "${{ matrix.linker }}"
+          EOF
+          cat .cargo/config.toml
 
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
