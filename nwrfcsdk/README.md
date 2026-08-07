@@ -122,7 +122,7 @@ cargo build
 成功会看到构建提示，例如：
 
 ```
-warning: rust_sap_rfc_demo@0.1.6: 使用 SAP NWRFC SDK: windows-x86_64
+warning: rust_sap_rfc_demo@0.2.0: 使用 SAP NWRFC SDK: windows-x86_64
     Finished `dev` profile [unoptimized + debuginfo] target(s)
 ```
 
