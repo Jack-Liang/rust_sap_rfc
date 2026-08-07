@@ -93,17 +93,35 @@ if [ "$SDK_OK" = "0" ]; then
 
         # SAP SDK zip 通常结构：nwrfcsdk/lib/<file>（无平台子目录）
         # 或者：nwrfcsdk/<os>-<arch>/lib/<file>
-        # 把任何包含 .so/.dylib 的目录复制到目标平台子目录
+        # 按当前平台筛选库文件扩展名，避免把错误平台的 SDK 复制进来
+        case "$OS" in
+            darwin) LIB_EXT="dylib" ;;
+            linux)  LIB_EXT="so" ;;
+            *)      LIB_EXT="dll" ;;
+        esac
         mkdir -p "$SDK_SUBDIR"
         SRC_LIB_DIR=$(find "$EXTRACT_TMP" -type d -name "lib" -path "*nwrfcsdk*" 2>/dev/null | head -1 || true)
         if [ -n "$SRC_LIB_DIR" ]; then
-            cp -f "$SRC_LIB_DIR"/*.so "$SRC_LIB_DIR"/*.dylib "$SRC_LIB_DIR"/*.dll "$SDK_SUBDIR/" 2>/dev/null || true
+            cp -f "$SRC_LIB_DIR"/*."$LIB_EXT" "$SDK_SUBDIR/" 2>/dev/null || true
         else
-            # 兜底：扫描整个 zip 找库文件
-            find "$EXTRACT_TMP" -type f \( -name "*.so" -o -name "*.dylib" -o -name "*.dll" \) \
+            # 兜底：扫描整个 zip 找当前平台的库文件
+            find "$EXTRACT_TMP" -type f -name "*.$LIB_EXT" \
                 -exec cp -f {} "$SDK_SUBDIR/" \; 2>/dev/null || true
         fi
+        # 校验：若 zip 里没有任何当前平台的库文件，多半是放错平台了
+        FOUND_COUNT=$(find "$EXTRACT_TMP" -type f -name "*.$LIB_EXT" 2>/dev/null | wc -l)
         rm -rf "$EXTRACT_TMP"
+        if [ "$FOUND_COUNT" -eq 0 ]; then
+            echo ""
+            err "zip 中未找到当前平台 ($OS-$ARCH) 的库文件 (*.$LIB_EXT)"
+            echo ""
+            echo "请确认下载的是对应平台的 SAP NWRFC SDK："
+            echo "  macOS   → darwin  → *.dylib"
+            echo "  Linux   → linux   → *.so"
+            echo "  Windows → windows → *.dll"
+            echo "当前平台：$OS-$ARCH（期望 *.$LIB_EXT）"
+            exit 1
+        fi
 
         # 验证
         LIB_COUNT=$(find "$SDK_SUBDIR" -maxdepth 1 \( -name "*.dll" -o -name "*.so" -o -name "*.dylib" \) 2>/dev/null | wc -l)

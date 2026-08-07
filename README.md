@@ -38,7 +38,9 @@
 >
 > 预编译二进制**省的是装 Rust 工具链 + 23 秒编译**，但**省不掉 SDK**——运行时仍要链接 SAP 库。
 >
-> 📦 **省事的做法**：把 SAP 下载的 zip（如 `nwrfcsdk-7.50.18-linux-x86_64.zip`）丢进 `nwrfcsdk/lib/<任意子目录>/`，启动脚本会自动解压到正确路径，**无需手动识别哪个文件该放哪**。详见 §「自动安装 SDK」。
+> 📦 **省事的做法**：把 SAP 下载的**对应平台** zip（如 macOS 上放 `nwrfcsdk-...-darwin-arm64.zip`，Linux 上放 `...-linux-x86_64.zip`）丢进 `nwrfcsdk/lib/` 下任意子目录，启动脚本会自动解压到 `<os>-<arch>/` 正确路径。详见 §「自动安装 SDK」。
+>
+> ⚠️ zip 必须与当前系统平台匹配（`.dylib`↔macOS、`.so`↔Linux、`.dll`↔Windows）。脚本不校验平台，放错平台的 zip 会导致解压后库文件无法加载。
 
 ### 自动安装 SDK（推荐）
 
@@ -49,20 +51,20 @@
 3. **`nwrfcsdk/lib/<任意>/nwrfcsdk-*.zip`** —— 自动识别并解压到正确路径 ✨
 4. 都没有 → 报错并清晰指引
 
-最省事：把 SAP 下载的 zip 整个丢到 `nwrfcsdk/lib/` 下任意子目录，启动脚本会自动处理。例如：
+最省事：把 SAP 下载的**对应平台** zip 整个丢到 `nwrfcsdk/lib/` 下任意子目录，启动脚本会自动处理。例如（macOS Apple Silicon）：
 
 ```
 nwrfcsdk/
 └── lib/
     └── incoming/                  ← 随便建一个目录
-        └── nwrfcsdk-7.50.18-linux-x86_64.zip   ← 把 zip 丢这里
+        └── nwrfcsdk-...-darwin-arm64.zip   ← 必须是当前平台的 SDK
 ```
 
 然后跑 `./start.sh`，脚本会自动：
 
 - 解压 zip
 - 识别 zip 内的库文件位置（SAP SDK zip 通常是 `nwrfcsdk/lib/<file>` 无平台子目录）
-- 复制到 `nwrfcsdk/lib/linux-x86_64/`（或对应平台子目录）
+- 复制到 `nwrfcsdk/lib/darwin-aarch64/`（或对应平台子目录）
 - 清理临时文件
 
 解压后的真实路径仍按 SAP 官方约定保留，便于后续更新 SDK。
@@ -80,7 +82,7 @@ nwrfcsdk/
    - Windows x86_64: `rust_sap_rfc-x86_64-pc-windows-msvc.zip`
 3. 解压，里面有 `rust_sap_rfc`（或 `.exe`）+ `README.md` + `.env.example` + `nwrfcsdk/` 目录骨架
 4. **下载 SAP NWRFC SDK**：到 [SAP Support Portal](https://launchpad.support.sap.com) 注册账号（需 SAP 客户/合作伙伴身份），搜索 `SAP NW RFC SDK`，按平台下载 zip
-5. **把 zip 放到 `nwrfcsdk/lib/<任意子目录>/` 下**（如 `nwrfcsdk/lib/incoming/`），启动脚本会自动解压到正确路径
+5. **把 zip 放到 `nwrfcsdk/lib/` 下任意子目录**（如 `nwrfcsdk/lib/incoming/`），启动脚本会自动解压到 `<os>-<arch>/` 正确路径。**注意 zip 必须匹配当前平台**（macOS→`.dylib`、Linux→`.so`、Windows→`.dll`）
 6. `cp .env.example .env` 并填 SAP 连接参数
 7. 运行：
    - Linux/macOS: `./rust_sap_rfc`
