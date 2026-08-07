@@ -1,0 +1,22 @@
+# Rust build artifacts
+target/
+debug/
+release/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs
+*.log
+
+# SAP SDK (redistribute separately)
+nwrfcsdk/

@@ -1,0 +1,7 @@
+[package]
+name = "rust_sap_rfc_demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# 无第三方依赖，基于标准库 FFI 实现
