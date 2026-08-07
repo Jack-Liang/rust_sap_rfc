@@ -1,94 +1,107 @@
-mod ffi;
-mod string_utils;
-mod error;
+mod api;
+mod config;
 mod connection;
+mod error;
+mod executor;
+mod ffi;
 mod function;
-mod call_spec;
+mod metadata;
+mod pool;
+mod server;
+mod string_utils;
 
-use call_spec::{execute, RfcCallSpec, RfcParamValue};
-use connection::RfcConnection;
+use crate::pool::RfcConnectionPool;
+use std::sync::Arc;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== Rust 手写 SAP RFC - 配置化调用 ===");
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 1. 初始化结构化日志（受 RUST_LOG 环境变量控制，默认 info）
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
-    // 1. 建立连接（连接信息在此处配置）
-    let conn = RfcConnection::new(&[
-        ("ASHOST", "localhost"),
-        ("SYSNR", "00"),
-        ("CLIENT", "001"),
-        ("USER", "DEVELOPER"),
-        ("PASSWD", "ABAPtr2023#00"),
-        ("LANG", "EN"),
-    ])?;
-    println!("✅ SAP 系统连接成功");
+    tracing::info!("=== Rust SAP RFC -> REST 服务启动 ===");
 
-    // ============ 以下为调用定义区：增删/替换这里即可切换 BAPI ============
+    // 2. 加载 .env（找不到文件不报错，可由真实环境变量替代）
+    let dotenv_result = dotenvy::dotenv();
+    let cfg = match config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            // 配置缺失时给完整引导，而非冷冰冰的单变量报错
+            print_config_guide(&e, dotenv_result.is_err());
+            return Err(e.into());
+        }
+    };
+    tracing::info!(listen = cfg.listen_addr, "配置加载完成");
 
-    // 示例 1：STFC_CONNECTION（基础连通测试）
-    let spec1 = RfcCallSpec {
-        func_name: "STFC_CONNECTION".into(),
-        inputs: vec![("REQUTEXT".into(), RfcParamValue::Chars("Hello from Rust!".into()))],
-        table_inputs: vec![],
-        int_outputs: vec![],
-        string_outputs: vec![("ECHOTEXT".into(), 255), ("RESPTEXT".into(), 255)],
-        table_outputs: vec![],
+    // 3. 创建连接池：首次建连，后续失败自动重连
+    let pool = RfcConnectionPool::new(cfg.conn_params)?;
+    tracing::info!("SAP 系统连接成功");
+    let shared: server::SharedPool = Arc::new(pool);
+
+    // 4. 构造优雅停机信号：Ctrl+C 或 SIGTERM 触发
+    let shutdown = async move {
+        let ctrl_c = async {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("安装 ctrl-c 信号处理器失败");
+        };
+
+        #[cfg(unix)]
+        let terminate = async {
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("安装 SIGTERM 信号处理器失败")
+                .recv()
+                .await;
+        };
+
+        #[cfg(not(unix))]
+        let terminate = std::future::pending::<()>();
+
+        tokio::select! {
+            _ = ctrl_c => tracing::info!("收到 Ctrl+C 信号，开始优雅停机"),
+            _ = terminate => tracing::info!("收到 SIGTERM 信号，开始优雅停机"),
+        }
     };
 
-    // 示例 2：BAPI_USER_GETLIST（取全部用户）
-    let spec2 = RfcCallSpec {
-        func_name: "BAPI_USER_GETLIST".into(),
-        inputs: vec![
-            ("MAX_ROWS".into(), RfcParamValue::Int(50)),
-            ("WITH_USERNAME".into(), RfcParamValue::Chars("X".into())),
-        ],
-        table_inputs: vec![],
-        int_outputs: vec!["ROWS".into()],
-        string_outputs: vec![],
-        table_outputs: vec![(
-            "USERLIST".into(),
-            vec![
-                ("USERNAME".into(), 12),
-                ("FIRSTNAME".into(), 40),
-                ("LASTNAME".into(), 40),
-            ],
-        )],
-    };
-
-    // 示例 3：BAPI_USER_GETLIST（带过滤条件 SELECTION_RANGE）
-    let spec3 = RfcCallSpec {
-        func_name: "BAPI_USER_GETLIST".into(),
-        inputs: vec![
-            ("MAX_ROWS".into(), RfcParamValue::Int(10)),
-            ("WITH_USERNAME".into(), RfcParamValue::Chars("X".into())),
-        ],
-        table_inputs: vec![(
-            "SELECTION_RANGE".into(),
-            vec![vec![
-                ("PARAMETER", RfcParamValue::Chars("USERNAME".into())),
-                ("FIELD", RfcParamValue::Chars("".into())),
-                ("SIGN", RfcParamValue::Chars("I".into())),
-                ("OPTION", RfcParamValue::Chars("CP".into())),
-                ("LOW", RfcParamValue::Chars("D*".into())),
-                ("HIGH", RfcParamValue::Chars("".into())),
-            ]],
-        )],
-        int_outputs: vec!["ROWS".into()],
-        string_outputs: vec![],
-        table_outputs: vec![(
-            "USERLIST".into(),
-            vec![
-                ("USERNAME".into(), 12),
-                ("FIRSTNAME".into(), 40),
-                ("LASTNAME".into(), 40),
-            ],
-        )],
-    };
-
-    // ============ 执行区：选择要跑的 spec ============
-    execute(&conn, spec2)?; // BAPI_USER_GETLIST 全量
-    execute(&conn, spec1)?; // STFC_CONNECTION
-    // execute(&conn, spec3)?; // BAPI_USER_GETLIST 过滤版（按需开启）
-
-    println!("\n✅ 全部调用完成，资源已自动释放");
+    // 5. 启动 axum（with_graceful_shutdown 让在飞请求完成后再退出）
+    server::run(shared, &cfg.listen_addr, shutdown).await?;
+    tracing::info!("服务已停止");
     Ok(())
+}
+
+/// 配置缺失时的友好引导。检测「无 .env 文件」这一典型场景，给出针对性步骤。
+/// `dotenv_not_found` 为 true 表示项目根目录没有 .env 文件。
+fn print_config_guide(err: &str, dotenv_not_found: bool) {
+    eprintln!();
+    eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    eprintln!("  ❌ 配置加载失败: {}", err);
+    eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    eprintln!();
+    if dotenv_not_found {
+        eprintln!("  未检测到 .env 文件。请按以下步骤操作：");
+        eprintln!();
+        eprintln!("  1. 复制配置模板：");
+        eprintln!("       cp .env.example .env        (Linux/macOS)");
+        eprintln!("       copy .env.example .env      (Windows CMD)");
+        eprintln!("       Copy-Item .env.example .env (PowerShell)");
+        eprintln!();
+        eprintln!("  2. 编辑 .env，填入 SAP 连接参数：");
+        eprintln!("       SAP_ASHOST=<SAP 应用服务器地址>");
+        eprintln!("       SAP_SYSNR=00");
+        eprintln!("       SAP_CLIENT=001");
+        eprintln!("       SAP_USER=<你的账号>");
+        eprintln!("       SAP_PASSWD=<你的密码>");
+        eprintln!();
+        eprintln!("  3. 重新运行：cargo run --release  （或 ./start.sh / start.ps1）");
+    } else {
+        eprintln!("  .env 文件已存在，但缺少必填项或值无效。");
+        eprintln!("  请检查 .env 中的以下变量是否都已填写：");
+        eprintln!("    SAP_ASHOST / SAP_SYSNR / SAP_CLIENT / SAP_USER / SAP_PASSWD");
+        eprintln!("  完整字段说明见 README.md §3 配置。");
+    }
+    eprintln!();
 }

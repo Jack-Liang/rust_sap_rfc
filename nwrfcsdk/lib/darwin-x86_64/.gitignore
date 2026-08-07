@@ -1,0 +1,8 @@
+# 此目录存放 macOS Intel (x86_64) 的 SAP NWRFC SDK 库。
+#
+# 需放入（从 SAP 下载的 macOS NWRFC SDK 取得）：
+#   libsapnwrfc.dylib
+#   libsapucum.dylib
+#
+# 这些 .dylib 文件会被 git 忽略（见根目录 .gitignore），仅本地使用。
+# 获取与放置步骤详见上级目录 README.md。

@@ -1,0 +1,50 @@
+# docker-compose: 一键构建 + 运行 rust-sap-rfc。
+#
+# 前置：
+#   1. .env 已配置好 SAP_* 连接参数（见 .env.example）
+#   2. .env 中 SAP_SDK_HOST_PATH 指向宿主机 Linux SDK 目录（绝对路径），
+#      该目录结构需与仓库 nwrfcsdk/ 一致：含 lib/linux-x86_64/libsapnwrfc.so
+#   3. nwrfcsdk/lib/linux-x86_64/ 下有 libsapnwrfc.so（构建期链接需要）
+#
+# 启动：docker compose up -d --build
+# 日志：docker compose logs -f
+# 停止：docker compose down
+
+services:
+  sap-rfc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rust-sap-rfc:latest
+    container_name: sap-rfc
+    restart: unless-stopped
+
+    # SAP 连接参数从 .env 注入（compose 自动加载同目录 .env）
+    environment:
+      SAP_ASHOST:     ${SAP_ASHOST}
+      SAP_SYSNR:      ${SAP_SYSNR}
+      SAP_CLIENT:     ${SAP_CLIENT}
+      SAP_USER:       ${SAP_USER}
+      SAP_PASSWD:     ${SAP_PASSWD}
+      SAP_LANG:       ${SAP_LANG:-EN}
+      SAP_LISTEN_ADDR: 0.0.0.0:3000
+      RUST_LOG:       ${RUST_LOG:-info}
+
+    # 运行时挂载宿主机 SDK（镜像本身不含 SDK，避免版权问题）
+    # SAP_SDK_HOST_PATH 在 .env 中配置
+    volumes:
+      - ${SAP_SDK_HOST_PATH:-./nwrfcsdk}:/app/nwrfcsdk:ro
+
+    ports:
+      - "${SAP_HOST_PORT:-3000}:3000"
+
+    # 健康检查：每 30s 探一次 /health，连续失败才标 unhealthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # 优雅停机：收到 SIGTERM 后给服务 30s 完成在飞请求
+    stop_grace_period: 30s

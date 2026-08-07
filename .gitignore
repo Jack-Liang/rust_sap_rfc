@@ -18,5 +18,15 @@ Desktop.ini
 # Logs
 *.log
 
-# SAP SDK (redistribute separately)
-nwrfcsdk/
+# SAP NWRFC SDK：保留目录结构与说明文件，但不上传二进制库与发行包
+# （SAP SDK 受版权限制，需各开发者自行从 SAP Support 下载）
+nwrfcsdk/**/*.dll
+nwrfcsdk/**/*.lib
+nwrfcsdk/**/*.so
+nwrfcsdk/**/*.so.*
+nwrfcsdk/**/*.a
+nwrfcsdk/**/*.dylib
+nwrfcsdk/**/*.zip
+
+# 本地环境变量（含真实凭据，不要提交）
+.env
