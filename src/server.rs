@@ -99,13 +99,26 @@ async fn index_handler() -> axum::response::Html<&'static str> {
 </head>
 <body>
 <h1>rust-sap-rfc</h1>
-<p class="lede">SAP NWRFC → REST 网关服务。POST /api/rfc 调用任意 BAPI。</p>
+<p class="lede">SAP NWRFC → REST 网关服务。POST /api/rfc 调用任意 BAPI，5 个元数据端点供 AI 自主探索。</p>
 
-<h2>端点</h2>
+<h2>通用调用</h2>
+<table>
+<tr><th>POST</th><td><code>/api/rfc</code></td><td>通用 RFC 调用，详见 README §5</td></tr>
+</table>
+
+<h2>面向 AI 的元数据 API</h2>
+<table>
+<tr><th>GET&nbsp;&nbsp;</th><td><code>/api/functions/:name</code></td><td>查函数接口（参数/类型/方向/嵌套字段）</td></tr>
+<tr><th>POST</th><td><code>/api/functions/search</code></td><td>搜索函数模块（body: <code>{"pattern":"BAPI_*"}</code>）</td></tr>
+<tr><th>GET&nbsp;&nbsp;</th><td><code>/api/functions/:name/doc</code></td><td>查函数文档（短文本 + SE37 长文本）</td></tr>
+<tr><th>GET&nbsp;&nbsp;</th><td><code>/api/ddic/type/:name</code></td><td>查 DDIC 结构/表字段定义</td></tr>
+<tr><th>GET&nbsp;&nbsp;</th><td><code>/api/ddic/field/:table/:field</code></td><td>查字段语义（数据元素/域/固定值）</td></tr>
+</table>
+
+<h2>其他</h2>
 <table>
 <tr><th>GET&nbsp;&nbsp;</th><td><code>/</code></td><td>本页面</td></tr>
 <tr><th></th><td><code>/health</code></td><td>健康检查，返回 <code>{"status":"ok"}</code>（不触碰 SAP）</td></tr>
-<tr><th>POST</th><td><code>/api/rfc</code></td><td>通用 RFC 调用，详见 README §5</td></tr>
 </table>
 
 <h2>连通测试</h2>
