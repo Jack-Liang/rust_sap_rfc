@@ -19,6 +19,8 @@ fn main() {
     //   - darwin-aarch64    同上 Apple Silicon
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    // CARGO_CFG_TARGET_OS 对 macOS 返回 "macos"，但项目目录约定用 "darwin"
+    let os = if os == "macos" { "darwin" } else { &os };
     let target_dir = format!("{}-{}", os, arch);
 
     let lib_dir = sdk_dir.join("lib").join(&target_dir);
