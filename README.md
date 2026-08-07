@@ -8,25 +8,20 @@
 - **通用接口**：一个端点 `/api/rfc` 描述任意 BAPI，无需为每个 BAPI 写代码
 - **面向 AI**：5 个元数据端点（搜函数/查接口/查文档/查数据字典），Agent 能自服务探索。给 AI 的操作指南见 [`AGENTS.md`](./AGENTS.md)
 
----
-
 ## 目录
 
-- [Quick Start（5 分钟跑起来）](#quick-start5-分钟跑起来)
-- [自动安装 SDK（推荐）](#自动安装-sdk推荐)
-- [下载预编译二进制（推荐给最终用户）](#下载预编译二进制推荐给最终用户)
-- [1. 适用场景与限制](#1-适用场景与限制)
-- [2. 准备工作](#2-准备工作)
-- [3. 配置](#3-配置)
-- [4. 启动](#4-启动)
-- [5. API 参考](#5-api-参考)
-- [6. 调用示例](#6-调用示例)
-- [7. 常见 BAPI 速查](#7-常见-bapi-速查)
-- [8. 错误处理](#8-错误处理)
-- [9. 部署提示](#9-部署提示)
-- [10. 架构与限制](#10-架构与限制)
-- [11. Server 端：被 SAP 调用（反向代理）](#11-server-端被-sap-调用反向代理)
-- [12. 发布新版本（维护者）](#12-发布新版本维护者)
+- [Quick Start](#quick-start5-分钟跑起来)
+- [§1 适用场景与限制](#1-适用场景与限制)
+- [§2 配置参考](#2-配置参考)
+- [§3 API 参考](#3-api参考) — 含 [3.3 面向 AI 的元数据 API](#33-面向-ai-的元数据-api)
+- [§4 调用示例](#4-调用示例)
+- [§5 常见 BAPI 速查](#5-常见-bapi-速查)
+- [§6 错误处理](#6-错误处理)
+- [§7 部署提示](#7-部署提示)
+- [§8 架构与限制](#8-架构与限制)
+- [§9 Server 端模式](#9-server-端模式被-sap-调用) — 详见 [docs/SERVER_MODE.md](./docs/SERVER_MODE.md)
+- [§10 发布新版本](#10-发布新版本维护者)
+- [License](#license)
 
 ---
 
@@ -141,7 +136,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 
 > `max_len` 留 `null` —— 服务会自动从 SAP 元数据发现字段长度，不必手填。
 
----
+
 
 ## 1. 适用场景与限制
 
@@ -162,7 +157,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 | 顶层结构体参数 | ✅ `struct_inputs` / `struct_outputs`（如 BAPI_USER_CREATE.ADDRESS），输出同样统一按字符串读 |
 | BCD/INT8/二进制 输入 | ✅ `{"type":"BCD",...}` / `{"type":"INT8",...}` / `{"type":"BYTES",...}`（BYTES 用 Base64） |
 | 元数据自动发现 | ✅ 字段长度缓存，无需手填 max_len（标量/表/结构体输出均生效） |
-| Server 端（被 SAP 回调）| ✅ 配置驱动 webhook 转发（`SAP_ROLE=server`），详见 §11 |
+| Server 端（被 SAP 回调）| ✅ 配置驱动 webhook 转发（`SAP_ROLE=server`），详见 [§9](#9-server-端模式被-sap-调用) |
 | tRFC/qRFC/bgRFC | ❌ 不支持 |
 | SSO/SNC 安全登录 | ❌ 仅用户名密码 |
 
@@ -177,48 +172,9 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 
 ---
 
-## 2. 准备工作
+## 2. 配置参考
 
-### 2.1 SAP NWRFC SDK
-
-本项目**不附带** SDK 二进制。请从 [SAP Support](https://launchpad.support.sap.com) 下载
-`sapnwrfcsdk`（按目标平台选），放到 `nwrfcsdk/lib/<os>-<arch>/` 子目录：
-
-```
-rust_sap_rfc/
-└── nwrfcsdk/
-    └── lib/
-        └── windows-x86_64/      ← Windows x64
-            ├── sapnwrfc.dll
-            ├── sapnwrfc.lib
-            ├── libsapucum.dll
-            └── libsapucum.lib
-        └── linux-x86_64/        ← Linux x64
-            ├── libsapnwrfc.so
-            └── libsapucum.so
-        # 其他平台：linux-aarch64 / darwin-x86_64 / darwin-aarch64 同理
-```
-
-`build.rs` 会按 `CARGO_CFG_TARGET_OS` + `CARGO_CFG_TARGET_ARCH` 自动选择对应的 `<os>-<arch>` 子目录。路径不同请改 [`build.rs`](./build.rs) 中的 `sdk_dir`。详细平台列表见 [`nwrfcsdk/README.md`](./nwrfcsdk/README.md)。
-
-### 2.2 Rust 工具链
-
-```bash
-# 安装 rustup（https://rustup.rs）后，stable 即可
-rustc --version   # 建议MSVC toolchain，用于本地链接 SAP DLL
-```
-
----
-
-## 3. 配置
-
-所有配置走环境变量，可写在项目根目录的 `.env` 文件里（已被 gitignore，不会提交）：
-
-```bash
-cp .env.example .env
-```
-
-`.env` 字段：
+所有配置走环境变量，写在项目根目录 `.env`（已被 gitignore，不会提交）。Quick Start 已涵盖基本用法，本节是完整字段参考。
 
 | 变量 | 必填 | 默认 | 说明 |
 |---|:---:|---|---|
@@ -227,49 +183,20 @@ cp .env.example .env
 | `SAP_CLIENT` | ✅ | — | 集团号，如 `001` |
 | `SAP_USER` | ✅ | — | 登录账号 |
 | `SAP_PASSWD` | ✅ | — | 登录密码 |
-| `SAP_LANG` | ❌ | `EN` | 登录语言 |
+| `SAP_LANG` | ❌ | `EN` | 登录语言（也影响文档端点的默认语言） |
 | `SAP_LISTEN_ADDR` | ❌ | `127.0.0.1:3000` | HTTP 服务监听地址 |
 | `SAP_POOL_SIZE` | ❌ | `8` | SAP 连接池上限（并发调用数），≥1 |
+| `SAP_ROLE` | ❌ | `client` | 运行模式：`client`/`server`/`both`（server 模式见 [§9](#9-server-端模式被-sap-调用)） |
+| `SAP_SDK_DIR` | ❌ | `./nwrfcsdk` | SDK 根目录（Docker/CI/自定义路径用） |
 
 > **生产部署提示**：不要把 `.env` 放进镜像层。用容器编排系统的密钥注入（K8s Secret / Docker Swarm secret）替代。
 
 ---
 
-## 4. 启动
 
-通过环境变量 `SAP_ROLE` 选择运行模式（默认 `client`）：
+## 3. API 参考
 
-| 值 | 行为 |
-|---|---|
-| `client`（默认）| 仅 client 模式：HTTP server，接受调用方请求并打到 SAP |
-| `server` | 仅 server 模式：注册到 SAP Gateway，被 SAP 回调时转发到 webhook（见 [§11](#11-server-端被-sap-调用反向代理)） |
-| `both` | 两个并行 |
-
-### 4.1 client 模式
-
-```bash
-cargo run --release              # 或 ./start.sh / powershell -File start.ps1
-```
-
-成功启动会输出：
-
-```
-=== Rust SAP RFC 服务启动 ===
-运行模式 role=client
-client 配置加载完成 listen="0.0.0.0:3000"
-SAP 系统连接成功（多连接池）
-HTTP 服务监听 addr="0.0.0.0:3000"
-  - POST /api/rfc   通用 RFC 调用
-  - GET  /health    健康检查
-```
-
-启动失败常见原因见 [§9 部署提示](#9-部署提示)。
-
----
-
-## 5. API 参考
-
-### 5.1 `GET /health`
+### 3.1 `GET /health`
 
 健康检查，**不触碰 SAP**，用于探活。
 
@@ -279,7 +206,7 @@ HTTP 服务监听 addr="0.0.0.0:3000"
 
 ---
 
-### 5.2 `POST /api/rfc`
+### 3.2 `POST /api/rfc`
 
 通用 RFC 调用。请求体描述要调哪个函数、传什么参数、要读哪些输出。
 
@@ -335,140 +262,37 @@ HTTP 服务监听 addr="0.0.0.0:3000"
 
 ---
 
-## 5.3 面向 AI 的元数据 API
+### 3.3 面向 AI 的元数据 API
 
-除通用 `POST /api/rfc` 外，本服务提供 5 个元数据查询端点，让 AI/Agent 能**自服务地**发现可用函数、理解参数结构、查数据字典、读文档，从而自主决定「调什么、怎么传参」。
+5 个端点让 AI/Agent 自服务地发现函数、理解参数、查数据字典、读文档。典型工作流：**搜索 → 查接口 → 查文档 → 调用**。给 AI 的完整操作指南见 [`AGENTS.md`](./AGENTS.md)。
 
-典型 AI 工作流：**搜索函数 → 查接口 → 查文档 → 调用**。
+| 端点 | 用途 | 示例 |
+|------|------|------|
+| `POST /api/functions/search` | 按通配符搜索函数 | `{"pattern":"BAPI_USER_*","max_results":10}` |
+| `GET /api/functions/:name` | 查函数完整接口（参数/类型/方向/嵌套字段） | `/api/functions/BAPI_USER_GET_DETAIL` |
+| `GET /api/functions/:name/doc` | 查文档（短文本+SE37长文档+参数说明） | `/api/functions/BAPI_USER_GET_DETAIL/doc?lang=EN` |
+| `GET /api/ddic/type/:name` | 查 DDIC 结构/表字段定义 | `/api/ddic/type/BAPIRET2` |
+| `GET /api/ddic/field/:table/:field` | 查字段语义（数据元素/域/固定值） | `/api/ddic/field/BAPIRET2/TYPE` |
 
-> 这组端点混合使用了两种技术：能高效拿到的（参数描述、DDIC 字段类型）走 SAP NWRFC SDK 的 C API；搜索/深层语义/长文档走 ABAP 标准 RFC（`RFC_FUNCTION_SEARCH`、`DDIF_FIELDINFO_GET`、`RFC_READ_TEXT`）。
-
-### 5.3.1 `GET /api/functions/:name` — 查函数完整接口
-
-返回某函数的全部参数：名称、类型、方向、长度、是否可选、默认值、描述文本，以及结构体/表参数的嵌套字段定义。
-
+端到端示例（列出用户）：
 ```bash
-curl http://127.0.0.1:3000/api/functions/BAPI_USER_GET_DETAIL
+# 1. 搜函数 → 2. 查接口(发现 EXPORT 表 USERLIST) → 3. 调用
+curl http://127.0.0.1:3000/api/functions/BAPI_USER_GETLIST
+curl -X POST http://127.0.0.1:3000/api/rfc -H "Content-Type: application/json" \
+  -d '{"func_name":"BAPI_USER_GETLIST","table_outputs":{"USERLIST":[["USERNAME",12]]},"read_return":true}'
 ```
 
-响应：
-```json
-{
-  "name": "BAPI_USER_GET_DETAIL",
-  "params": [
-    {"name":"USERNAME","type":"CHAR","direction":"IMPORT","length":12,"optional":false,"description":"用户名称"},
-    {"name":"ADDRESS","type":"STRUCTURE","direction":"EXPORT","optional":true,"description":"地址数据",
-     "fields":[
-       {"name":"FIRSTNAME","type":"CHAR","length":35},
-       {"name":"LASTNAME","type":"CHAR","length":35}
-     ]}
-  ]
-}
-```
-
-### 5.3.2 `POST /api/functions/search` — 搜索函数模块
-
-按名字通配符搜索可远程调用的函数模块（内部调用 ABAP RFC `RFC_FUNCTION_SEARCH`）。
-
-```bash
-curl -X POST http://127.0.0.1:3000/api/functions/search \
-  -H "Content-Type: application/json" \
-  -d '{"pattern":"BAPI_USER_*","max_results":10}'
-```
-
-| 字段 | 必填 | 默认 | 说明 |
-|---|:---:|---|---|
-| `pattern` | ❌ | `*` | 函数名通配符，如 `BAPI_USER_*` |
-| `group` | ❌ | 空 | 函数组过滤 |
-| `max_results` | ❌ | `50` | 最多返回条数 |
-
-响应：
-```json
-{
-  "pattern":"BAPI_USER_*","count":2,
-  "functions":[
-    {"name":"BAPI_USER_GET_DETAIL","group":"SU","description":"读取用户数据"},
-    {"name":"BAPI_USER_GETLIST","group":"SU","description":"查询用户列表"}
-  ]
-}
-```
-
-### 5.3.3 `GET /api/functions/:name/doc` — 查函数文档
-
-返回函数的短文本 + SE37 长文档 + 各参数描述（内部调用 `DOCU_GET`，文档对象 `OBJECT=函数名`/`ID=FU`）。
-
-```bash
-curl 'http://127.0.0.1:3000/api/functions/BAPI_USER_GET_DETAIL/doc?lang=ZH'
-```
-
-| 查询参数 | 默认 | 说明 |
-|---|---|---|
-| `lang` | `SAP_LANG` 环境变量（回退 `EN`） | 文档语言，如 `ZH`/`EN` |
-
-响应：
-```json
-{
-  "name":"BAPI_USER_GET_DETAIL",
-  "short_text":"读取用户主数据",
-  "long_text":"<完整 SE37 函数文档>",
-  "parameter_docs":[{"name":"USERNAME","text":"用户名称"}]
-}
-```
-
-> 并非所有函数都有 SE37 长文档。无文档时 `long_text` 为空，`warning` 字段提示原因，不报错。
-
-> ⚠️ **长文档依赖 `DOCU_GET`**：该函数在多数 SAP 系统可用（组 SDOC）。若个别系统未启用，`long_text` 为空并在 `warning` 提示，但 `short_text` 和 `parameter_docs` 仍可用（来自 C API 参数描述，不依赖该函数）。参数描述对 AI 理解如何传参通常已足够。
-
-### 5.3.4 `GET /api/ddic/type/:name` — 查 DDIC 结构/表字段
-
-给定表名/结构名（如 `MARA`、`BAPIRETURN`），返回所有字段定义（内部用 C API `RfcGetTypeDesc`，高效）。
-
-```bash
-curl http://127.0.0.1:3000/api/ddic/type/BAPIRET2
-```
-
-> ⚠️ **透明表 vs 结构**：此端点对 DDIC **结构**（如 `BAPIRET2`、`BAPIRETURN`）普遍可用；对**透明表**（如 `MARA`）是否支持取决于目标 SAP 系统的 DDIC 配置——部分系统会对透明表返回 `NOT_FOUND`。透明表若不可用，改用端点④的 `DDIF_FIELDINFO_GET`（支持更广），或直接调 `POST /api/rfc` 用 `RFC_FUNCTION_SEARCH` 间接探查。
-
-响应：
-```json
-{
-  "name":"MARA",
-  "fields":[
-    {"name":"MATNR","type":"CHAR","length":18,"description":"物料号"},
-    {"name":"MTART","type":"CHAR","length":4,"description":"物料类型"}
-  ]
-}
-```
-
-### 5.3.5 `GET /api/ddic/field/:table/:field` — 查字段语义元数据
-
-查单个字段的深层语义：数据元素、域、检查表、文本标签、固定值（内部调用 `DDIF_FIELDINFO_GET`）。
-
-```bash
-curl 'http://127.0.0.1:3000/api/ddic/field/MARA/MTART?lang=ZH'
-```
-
-响应：
-```json
-{
-  "table":"MARA","field":"MTART",
-  "data_element":"MTART","domain":"MTART",
-  "description":"物料类型",
-  "medium_label":"物料类型",
-  "fixed_values":[
-    {"value":"FERT","text":"成品"},
-    {"value":"HALB","text":"半成品"}
-  ]
-}
-```
-
-> `fixed_values`（域的固定值范围）对 AI 理解状态码/类型字段的合法取值特别有用——AI 调用 BAPI 时可据此填正确的枚举值。
+> **约束**
+> - DDIC 类型查询(端点 4/5)对**结构**普遍可用；**透明表**(如 MARA)视目标系统 DDIC 配置可能 `NOT_FOUND`。
+> - 长文档(端点 3)依赖 `DOCU_GET`，个别系统未启用时 `long_text` 为空，但参数描述仍可用。
+> - `fixed_values` 对理解状态码/枚举字段的合法取值特别有用。
 
 ---
 
-## 6. 调用示例
 
-### 6.1 最小连通测试 — `STFC_CONNECTION`
+## 4. 调用示例
+
+### 4.1 最小连通测试 — `STFC_CONNECTION`
 
 SAP 标准 ping 函数，回显你发的文本。
 
@@ -495,7 +319,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 }
 ```
 
-### 6.2 读取用户列表 — `BAPI_USER_GETLIST`
+### 4.2 读取用户列表 — `BAPI_USER_GETLIST`
 
 ```bash
 curl -X POST http://127.0.0.1:3000/api/rfc \
@@ -517,7 +341,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 
 > `max_len` 也可省略 → 服务端按 SAP 元数据自动发现。例如 `{"name": "USERNAME"}`。
 
-### 6.3 带选择条件 — `BAPI_USER_GETLIST` + `SELECTION_RANGE`
+### 4.3 带选择条件 — `BAPI_USER_GETLIST` + `SELECTION_RANGE`
 
 `table_inputs` 演示：过滤用户名以 `D` 开头。
 
@@ -548,7 +372,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
   }'
 ```
 
-### 6.4 用其他语言调用
+### 4.4 用其他语言调用
 
 **Python (requests)**
 
@@ -579,7 +403,7 @@ console.log(await r.json());
 
 ---
 
-## 7. 常见 BAPI 速查
+## 5. 常见 BAPI 速查
 
 > 下表帮你快速知道哪些字段名该填哪里。具体可用字段需查 SE37 / SAP 官方文档。
 
@@ -598,9 +422,9 @@ console.log(await r.json());
 
 ---
 
-## 8. 错误处理
+## 6. 错误处理
 
-### 8.1 HTTP 状态码
+### 6.1 HTTP 状态码
 
 | 状态码 | 触发场景 |
 |---|---|
@@ -608,7 +432,7 @@ console.log(await r.json());
 | `400 Bad Request` | 请求体 JSON 不合法或字段类型不符（由 axum 自动返回） |
 | `500 Internal Server Error` | SAP 调用失败（连接断、参数名错、ABAP 抛异常等） |
 
-### 8.2 错误响应体
+### 6.2 错误响应体
 
 ```json
 {
@@ -626,7 +450,7 @@ console.log(await r.json());
 | `key` | SDK 错误 key 字符串，便于精确分类 |
 | `message` | 人类可读错误描述 |
 
-### 8.3 500 错误排查思路
+### 6.3 500 错误排查思路
 
 1. **看 `key`**：`RFC_COMMUNICATION_FAILURE` 多半是网络/连接；`RFC_ABAP_EXCEPTION` 是 ABAP 抛错
 2. **看 `code` 对照 SDK 头文件 `sapnwrfc.h` 中的 `RFC_RC` 枚举**
@@ -634,12 +458,12 @@ console.log(await r.json());
 
 ---
 
-## 9. 部署提示
+## 7. 部署提示
 
 > **快速部署**：项目提供 `docker-compose.yml`，配好 `.env`（含 `SAP_SDK_HOST_PATH`）后
 > `docker compose up -d --build` 即可。详见 [Quick Start](#quick-start5-分钟跑起来)。
 
-### 9.1 `sapnwrfc.dll` 找不到
+### 7.1 `sapnwrfc.dll` 找不到
 
 运行期 Windows 必须能加载 `sapnwrfc.dll`。两种方式：
 
@@ -648,7 +472,7 @@ console.log(await r.json());
 
 启动时若报「找不到 DLL入口」之类，多半是 PATH 问题。
 
-### 9.2 启动失败：连接相关
+### 7.2 启动失败：连接相关
 
 ```
 配置加载失败: 缺少必填环境变量: SAP_ASHOST
@@ -660,22 +484,22 @@ RFC调用错误(代码: 2)：...
 ```
 连不上 SAP：检查 `ASHOST`/`SYSNR` 网络可达、账号密码、`CLIENT` 集团号。
 
-### 9.3 服务化部署
+### 7.3 服务化部署
 
 - 用 systemd / NSSM / Windows Service 把二进制注册为开机自启服务
 - 监听 `0.0.0.0:3000` 仅在内网；对外请加反向代理（Nginx）+ 鉴权 + HTTPS
 - 建议加 `SAP_LISTEN_ADDR` 限制到内网网卡
 
-### 9.4 信任边界
+### 7.4 信任边界
 
 本服务**不做鉴权**。任何能访问监听端口的调用方都能用配置的 SAP 账号执行任意 RFC。
 务必放在受控网络或加一层网关鉴权。
 
 ---
 
-## 10. 架构与限制
+## 8. 架构与限制
 
-### 10.1 模块结构
+### 8.1 模块结构
 
 ```
 src/
@@ -691,7 +515,7 @@ src/
 └── string_utils.rs UTF-8 ↔ UTF-16(SAP UC) 转换
 ```
 
-### 10.2 并发模型
+### 8.2 并发模型
 
 ```
 [HTTP 请求 N] ─▶ axum handler（async）
@@ -705,7 +529,7 @@ src/
 - **为什么需要 `unsafe impl Send`**：`RfcConnection` 持裸指针非 Send；在 `Mutex` 串行化保护下，NWRFC SDK 允许跨线程串行使用同一连接，故 sound
 - **池大小**：默认 `SAP_POOL_SIZE=8`，可在 `.env` 调整。请求从池里抢空闲连接，未抢到则等待；连接失败时按需自动重连
 
-### 10.3 升级路径（规划中，提示扩展点）
+### 8.3 升级路径（规划中，提示扩展点）
 
 | 需求 | 状态 / 改造方向 |
 |---|---|
@@ -716,153 +540,18 @@ src/
 
 ---
 
-## 11. Server 端：被 SAP 调用（反向代理）
+## 9. Server 端模式（被 SAP 调用）
 
-除 client 模式（HTTP→SAP）外，本服务还支持 **server 模式**：让 SAP 系统通过 RFC 回调本服务，本服务把调用转发到配置的 HTTP webhook。实现「SAP → HTTP」的反向代理，与 client 对称。
+除 client 模式（HTTP→SAP）外，本服务还支持 **server 模式**：让 SAP 通过 RFC 回调本服务，转发到配置的 HTTP webhook，实现「SAP → HTTP」反向代理。适合让 ABAP 调用外部微服务、或把业务事件从 SAP 推送出去。
 
-典型用途：让 ABAP 程序调用外部微服务（无需 ABAP 写 HTTP 客户端）；把业务事件从 SAP 推送到外部系统。
+启用方式：`SAP_ROLE=server`，配合 `servers.toml` 配置 gateway/program_id/函数/webhook。
 
-### 11.1 工作原理
-
-```
-[SAP 系统]
-  1. SM59 配 RFC Destination（Type T, Registration mode, Program ID=ZREST_SERVER）
-  2. ABAP: CALL FUNCTION 'Z_REST_PING' DESTINATION 'ZREST'
-       │
-       ▼ (SAP 主动连本服务注册的 Program ID)
-[本服务: RfcListenAndDispatch 循环]
-  3. 收到 Z_REST_PING 调用 → 读入参
-  4. POST {func, inputs} 到配置的 webhook_url
-  5. 收 webhook 响应 {outputs} → 回填 EXPORTING 参数
-       │
-       ▼
-[配置的 webhook 服务（任意语言）]
-  收到请求 → 业务处理 → 返回结果
-```
-
-### 11.2 启用 server 模式
-
-通过环境变量 `SAP_ROLE` 控制：
-
-| 值 | 行为 |
-|---|---|
-| `client`（默认）| 仅 client 模式（现有 HTTP server） |
-| `server` | 仅 server 模式（dispatch 循环，被 SAP 调） |
-| `both` | 两个并行（client HTTP + server dispatch） |
-
-```bash
-# 1. 配置 servers.toml（cp servers.toml.example servers.toml 后编辑）
-#    填 gateway 地址 + program_id + 函数定义 + webhook URL
-
-# 2. 启动（server 模式）
-SAP_ROLE=server SERVERS_CONFIG=servers.toml cargo run --release
-```
-
-### 11.3 配置文件 `servers.toml`
-
-```toml
-[gateway]
-gwhost = "192.168.0.215"        # SAP Gateway 主机
-gwserv = "sapgw00"              # sysnr 00 → sapgw00
-program_id = "ZREST_SERVER"     # 必须与 SM59 的 Program ID 一致
-
-[[functions]]
-name = "Z_REST_PING"            # SAP 调用的函数名
-webhook_url = "http://localhost:9000/ping"
-
-[[functions.params]]
-name = "INPUT"
-direction = "import"            # import/export/changing/tables
-type = "char"                   # char/int/float/bcd/date/time/num/byte/xstring/string
-length = 255
-
-[[functions.params]]
-name = "OUTPUT"
-direction = "export"
-type = "char"
-length = 1024
-```
-
-> **重要**：`program_id` 必须与 SAP 侧 SM59 配置完全一致。函数名建议用 `Z_` 前缀（自定义命名空间）。
-
-### 11.4 SAP 侧 SM59 配置（你负责）
-
-在 SAP 系统（SE37/SM59）配置 RFC Destination：
-
-1. **T-code `SM59`** → Create
-2. **RFC Connection Type**: `T`（TCP/IP Connection）
-3. **Activation Type**: **Registered Server Program**
-4. **Program ID**: 与 `servers.toml` 的 `program_id` 一致（如 `ZREST_SERVER`）
-5. **Gateway Host**: SAP 系统的 gateway（即 `servers.toml` 里 `gwhost` 指向的系统的 gw）
-6. **Gateway Service**: `sapgw00`（对应 sysnr）
-7. **保存后测试**：点 Connection Test。此时本服务必须已启动并注册，否则测试会失败
-
-ABAP 调用示例：
-```abap
-DATA: lv_input  TYPE c LENGTH 255,
-      lv_output TYPE c LENGTH 1024.
-
-lv_input = 'hello'.
-CALL FUNCTION 'Z_REST_PING' DESTINATION 'ZREST'
-  IMPORTING
-    input  = lv_input
-  EXPORTING
-    output = lv_output.
-" lv_output 现在是 webhook 返回的处理结果
-```
-
-### 11.5 webhook 协议
-
-**请求**（本服务 POST 给 webhook）：
-```json
-{
-  "func": "Z_REST_PING",
-  "inputs": { "INPUT": "hello" }
-}
-```
-
-**响应**（webhook 返回）：
-```json
-{
-  "outputs": { "OUTPUT": "processed: hello" }
-}
-```
-
-- 请求/响应都是 JSON，Content-Type: application/json
-- webhook 必须**在 30 秒内返回**（否则 SAP 端 RFC 超时）
-- `outputs` 的键必须与 `[[functions.params]]` 里 direction=export 的参数名一致
-- webhook 返回非 2xx 或超时 → 本服务向 SAP 回传 `SYSTEM_FAILURE`
-
-### 11.6 webhook 示例（Python Flask）
-
-```python
-from flask import Flask, request, jsonify
-app = Flask(__name__)
-
-@app.post("/ping")
-def ping():
-    data = request.json
-    inp = data["inputs"]["INPUT"]
-    # 业务处理
-    return jsonify({"outputs": {"OUTPUT": f"processed: {inp}"}})
-
-if __name__ == "__main__":
-    app.run(port=9000)
-```
-
-### 11.7 限制（首版）
-
-| 项 | 说明 |
-|---|---|
-| 无状态 | 每个 SAP 调用独立处理，不维护 stateful session |
-| 串行 dispatch | 单线程 dispatch，SAP 并发调用排队（可后续多线程） |
-| 类型简化 | 入参/出参统一按字符串读写（数值类型靠 webhook 侧自行转换） |
-| 不支持 tRFC/qRFC | 事务回调首版未实现 |
-| webhook 超时 | 30 秒硬编码（后续可配置化） |
+完整说明（工作原理、SM59 配置、webhook 协议、示例）见 **[`docs/SERVER_MODE.md`](./docs/SERVER_MODE.md)**。
 
 ---
 
-## 12. 发布新版本（维护者）
+
+## 10. 发布新版本（维护者）
 
 1. 提交所有改动，本地构建确认通过：
    ```bash
