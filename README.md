@@ -571,11 +571,11 @@ src/
    cargo test
    cargo build --release
    ```
-2. 更新 `Cargo.toml` 里的 `version` 字段（如 `0.1.0` → `0.2.0`）
+2. 更新 `Cargo.toml` 里的 `version` 字段（如 `0.2.0` → `0.3.0`）
 3. 打 tag 并推送，CI 自动构建 Linux/macOS/Windows 二进制并上传到 GitHub Release：
    ```bash
-   git tag v0.2.0
-   git push origin v0.2.0
+   git tag v0.3.0
+   git push origin v0.3.0
    ```
 4. Windows 二进制由 CI 自动产出（`.def` + `lib.exe` 生成 stub 导入库绕过 MSVC 链接限制），
    无需维护者手工构建。如需本地复现 CI 的 stub 链接，可在「x64 Native Tools Command Prompt」中：
