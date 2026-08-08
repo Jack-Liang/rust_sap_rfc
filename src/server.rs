@@ -10,7 +10,7 @@ use crate::api::{
     FunctionDocResponse, FunctionInterface, FunctionParam, InvokeRequest, InvokeResponse, ParamDoc,
     SearchFunctionEntry, SearchResponse,
 };
-use crate::connection::get_field_infos;
+use crate::connection::{get_field_infos, RfcConnection};
 use crate::error::RfcError;
 use crate::executor::execute_collect;
 use crate::pool::RfcConnectionPool;
@@ -21,16 +21,39 @@ use std::sync::Arc;
 /// 全局共享状态：连接池（内部含连接 + 重连参数）
 pub type SharedPool = Arc<RfcConnectionPool>;
 
-/// 构建带共享连接池的 Router
-pub fn app(pool: SharedPool) -> Router {
-    // 注：原本想用 utoipa 自动生成 OpenAPI spec 在 /openapi.json，但 utoipa 5.x
-    // 在 axum 0.7 下生成 spec 时对递归类型（FieldDef 含 Box<Self>）展开栈溢出。
-    // // utoipa-swagger-ui 在 axum 0.7 下也存在栈溢出 bug。
-    // // 暂时只提供稳定的业务路由。AI/Agent 通过 /agents.md 接入（已含完整端点说明）。
+/// 在阻塞线程池内通过连接池执行一个 SAP 调用。
+///
+/// 把 `spawn_blocking` + `with_connection`（含自动重连）+ Join 失败的错误映射
+/// 收敛到一处，handler 只需提供业务闭包。FFI 与连接池内部状态都被限制在
+/// 阻塞闭包中，绝不跨 await 点，保证 future 干净 Send。
+async fn run_blocking<F, R>(pool: SharedPool, f: F) -> Result<R, RfcError>
+where
+    F: FnMut(&RfcConnection) -> Result<R, RfcError> + Send + 'static,
+    R: Send + 'static,
+{
+    let pool = Arc::clone(&pool);
+    tokio::task::spawn_blocking(move || pool.with_connection(f))
+        .await
+        .map_err(|e| RfcError {
+            code: -1,
+            message: format!("阻塞任务失败: {}", e),
+            key: String::new(),
+            ..Default::default()
+        })?
+}
+
+/// 仅静态路由（不依赖 SAP 连接池）：首页 / Agent 文档 / 健康检查。
+/// 供集成测试用，无需构造 pool 即可验证这几个端点。
+pub fn static_app<S: Clone + Send + Sync + 'static>() -> Router<S> {
     Router::new()
         .route("/", axum::routing::get(index_handler))
         .route("/agents.md", axum::routing::get(agents_handler))
         .route("/health", axum::routing::get(health_handler))
+}
+
+/// 构建带共享连接池的 Router（静态路由 + SAP 业务路由）
+pub fn app(pool: SharedPool) -> Router {
+    static_app()
         .route("/api/rfc", post(invoke_handler))
         .route("/api/functions/search", post(search_functions_handler))
         .route("/api/functions/:name", axum::routing::get(function_interface_handler))
@@ -83,6 +106,7 @@ async fn agents_handler() -> axum::response::Response {
 }
 
 /// GET / —— 浏览器欢迎页（含 Agent 文档入口 + 接口速览）
+/// HTML 模板见 src/index.html（编译期 include_str! 嵌入，不依赖磁盘文件）。
 /// 从请求 Host 头动态推导访问地址，链接自动匹配用户实际访问的 host:port。
 async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::response::Html<String> {
     // 从 Host 头取访问地址（如 127.0.0.1:3000 或 192.168.1.5:3000）
@@ -94,132 +118,9 @@ async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::resp
     let base = format!("http://{host}");
     let agents_url = format!("{base}/agents.md");
 
-    let html = format!(
-        r#"<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>rust-sap-rfc · SAP NWRFC REST 网关</title>
-<style>
-  * {{ box-sizing: border-box; }}
-  body {{ font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 820px; margin: 0 auto; padding: 40px 20px 60px; color: #1f2328; background: #fafbfc; }}
-  a {{ color: #0969da; text-decoration: none; }}
-  a:hover {{ text-decoration: underline; }}
-  code {{ font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; background: #eff1f3; padding: 2px 6px; border-radius: 4px; }}
-  pre {{ background: #161b22; color: #e6edf3; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; line-height: 1.5; }}
-  pre code {{ background: none; color: inherit; padding: 0; }}
-
-  /* Hero */
-  .hero {{ background: #fff; border: 1px solid #d0d7de; border-radius: 12px; padding: 32px; margin-bottom: 24px; }}
-  .hero h1 {{ margin: 0 0 8px; font-size: 26px; font-weight: 700; }}
-  .hero .lede {{ margin: 0 0 4px; color: #57606a; font-size: 15px; }}
-
-  /* Agent 卡片 */
-  .agent {{ background: linear-gradient(135deg, #ddf4ff 0%, #dafbe1 100%); border: 1px solid #54aeff; border-radius: 12px; padding: 24px; margin-bottom: 32px; }}
-  .agent-title {{ display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 700; color: #0969da; margin: 0 0 8px; }}
-  .agent-title svg {{ flex-shrink: 0; }}
-  .agent p {{ margin: 8px 0; color: #1f2328; }}
-  .agent-url {{ display: inline-flex; align-items: center; gap: 8px; background: #fff; border: 1px solid #54aeff; padding: 8px 8px 8px 16px; border-radius: 8px; font-family: monospace; font-size: 14px; font-weight: 600; word-break: break-all; }}
-  .agent-url a {{ color: #0969da; }}
-  .copy-btn {{ flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; background: #0969da; color: #fff; border: none; border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background .15s; }}
-  .copy-btn:hover {{ background: #0860c9; }}
-  .copy-btn.copied {{ background: #1a7f37; }}
-  .copy-btn svg {{ width: 14px; height: 14px; }}
-  .agent .hint {{ font-size: 13px; color: #57606a; }}
-
-  /* 章节标题 */
-  h2.section {{ font-size: 14px; font-weight: 600; color: #57606a; text-transform: uppercase; letter-spacing: 0.5px; margin: 36px 0 12px; }}
-
-  /* 端点卡片网格 */
-  .grid {{ display: grid; grid-template-columns: 1fr; gap: 10px; }}
-  .ep {{ display: flex; align-items: center; gap: 12px; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 12px 16px; transition: box-shadow .15s; }}
-  .ep:hover {{ box-shadow: 0 1px 6px rgba(0,0,0,.08); }}
-  .method {{ display: inline-block; min-width: 48px; text-align: center; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 4px; flex-shrink: 0; }}
-  .m-get {{ background: #dafbe1; color: #1a7f37; border: 1px solid #4ac26b; }}
-  .m-post {{ background: #ddf4ff; color: #0969da; border: 1px solid #54aeff; }}
-  .ep code {{ background: none; padding: 0; font-size: 13px; font-weight: 500; color: #24292f; }}
-  .ep .desc {{ margin-left: auto; font-size: 13px; color: #57606a; text-align: right; }}
-
-  footer {{ margin-top: 40px; padding-top: 20px; border-top: 1px solid #d0d7de; font-size: 13px; color: #57606a; }}
-  footer a {{ margin-right: 16px; }}
-
-  @media (max-width: 600px) {{
-    .ep {{ flex-wrap: wrap; }}
-    .ep .desc {{ margin-left: 0; width: 100%; text-align: left; color: #8c959f; font-size: 12px; }}
-    .hero h1 {{ font-size: 22px; }}
-  }}
-</style>
-</head>
-<body>
-
-<div class="hero">
-  <h1>rust-sap-rfc</h1>
-  <p class="lede">SAP NWRFC → REST 网关服务 · 一个端点调用任意 BAPI，5 个元数据端点供 AI 自主探索</p>
-</div>
-
-<div class="agent">
-  <div class="agent-title">
-    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg>
-    给 AI / Agent 用？
-  </div>
-  <p>把这个链接直接粘贴给 Claude / GPT 等 Agent，它就能自主搜索函数、查参数、调 SAP：</p>
-  <p><span class="agent-url"><a href="/agents.md" id="agent-link">{agents_url}</a><button class="copy-btn" onclick="copyLink(this)" title="复制链接"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制</button></span></p>
-  <p class="hint">Agent 读取这份文档后，就知道有哪些端点、怎么调、操作流程</p>
-</div>
-
-<h2 class="section">通用调用</h2>
-<div class="grid">
-  <div class="ep"><span class="method m-post">POST</span><code>/api/rfc</code><span class="desc">通用 RFC 调用</span></div>
-</div>
-
-<h2 class="section">面向 AI 的元数据 API</h2>
-<div class="grid">
-  <div class="ep"><span class="method m-get">GET</span><code>/api/functions/&#123;name&#125;</code><span class="desc">查函数接口（参数/类型/嵌套字段）</span></div>
-  <div class="ep"><span class="method m-post">POST</span><code>/api/functions/search</code><span class="desc">搜索函数模块</span></div>
-  <div class="ep"><span class="method m-get">GET</span><code>/api/functions/&#123;name&#125;/doc</code><span class="desc">查函数文档（短文本 + SE37 长文档）</span></div>
-  <div class="ep"><span class="method m-get">GET</span><code>/api/ddic/type/&#123;name&#125;</code><span class="desc">查 DDIC 结构/表字段定义</span></div>
-  <div class="ep"><span class="method m-get">GET</span><code>/api/ddic/field/&#123;table&#125;/&#123;field&#125;</code><span class="desc">查字段语义（数据元素/域/固定值）</span></div>
-</div>
-
-<h2 class="section">其他端点</h2>
-<div class="grid">
-  <div class="ep"><span class="method m-get">GET</span><code>/</code><span class="desc">本页面</span></div>
-  <div class="ep"><span class="method m-get">GET</span><code>/agents.md</code><span class="desc">AI/Agent 操作文档</span></div>
-  <div class="ep"><span class="method m-get">GET</span><code>/health</code><span class="desc">健康检查（不触碰 SAP）</span></div>
-</div>
-
-<h2 class="section">连通测试</h2>
-<pre><code>curl -X POST {base}/api/rfc \
-  -H "Content-Type: application/json" \
-  -d '{{"func_name":"STFC_CONNECTION","inputs":{{"REQUTEXT":"hi"}},"string_outputs":{{"ECHOTEXT":255,"RESPTEXT":255}}}}'</code></pre>
-
-<footer>
-  <a href="https://github.com/Jack-Liang/rust_sap_rfc">项目源码</a>
-  <a href="https://github.com/Jack-Liang/rust_sap_rfc/issues">问题反馈</a>
-  <span style="float:right">完整文档见 <code>README.md</code> / <code>AGENTS.md</code></span>
-</footer>
-
-<script>
-function copyLink(btn) {{
-  const url = document.getElementById('agent-link').href;
-  navigator.clipboard.writeText(url).then(function() {{
-    const orig = btn.innerHTML;
-    btn.classList.add('copied');
-    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>已复制';
-    setTimeout(function() {{ btn.classList.remove('copied'); btn.innerHTML = orig; }}, 2000);
-  }}).catch(function() {{
-    // clipboard API 不可用（如非 HTTPS/localhost），降级选中文本让用户 Cmd+C
-    const range = document.createRange(); range.selectNode(document.getElementById('agent-link'));
-    window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
-    btn.textContent = '已选中，按 Cmd/Ctrl+C';
-  }});
-}}
-</script>
-
-</body>
-</html>"#
-    );
+    let html = include_str!("index.html")
+        .replace("{{BASE_URL}}", &base)
+        .replace("{{AGENTS_URL}}", &agents_url);
     axum::response::Html(html)
 }
 
@@ -227,35 +128,15 @@ function copyLink(btn) {{
 ///
 /// 流程：反序列化请求 → spawn_blocking 内通过连接池执行（含自动重连）→ 返回 JSON 结果。
 /// FFI 与连接池内部状态都被限制在阻塞闭包中，绝不跨 await 点。
-/// POST /api/rfc —— 通用 RFC 调用
-#[utoipa::path(
-    post,
-    path = "/api/rfc",
-    tag = "通用调用",
-    request_body = InvokeRequest,
-    responses(
-        (status = 200, description = "调用成功", body = InvokeResponse),
-        (status = 500, description = "调用失败", body = crate::error::ErrorResponse)
-    )
-)]
 async fn invoke_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
     Json(req): Json<InvokeRequest>,
 ) -> Result<Json<InvokeResponse>, RfcError> {
-    let pool_clone = Arc::clone(&pool);
     let started = std::time::Instant::now();
     let func_name = req.func_name.clone();
 
-    let resp = tokio::task::spawn_blocking(move || {
-        // 通过 with_connection 执行：遇通信错误自动重连重试一次
-        pool_clone.with_connection(|conn| execute_collect(conn, &req))
-    })
-    .await
-    .map_err(|e| RfcError {
-        code: -1,
-        message: format!("阻塞任务失败: {}", e),
-        key: String::new(),
-    })??;
+    // 通过 with_connection 执行：遇通信错误自动重连重试一次
+    let resp = run_blocking(pool, move |conn| execute_collect(conn, &req)).await?;
 
     tracing::info!(
         func = %func_name,
@@ -314,57 +195,40 @@ fn param_info_to_field_def(
 }
 
 /// ① GET /api/functions/:name —— 查函数完整接口（参数/类型/方向/嵌套字段）
-#[utoipa::path(
-    get,
-    path = "/api/functions/{name}",
-    tag = "元数据查询",
-    params(("name" = String, Path, description = "函数模块名")),
-    responses(
-        (status = 200, description = "函数接口信息", body = FunctionInterface),
-        (status = 500, description = "查询失败", body = crate::error::ErrorResponse)
-    )
-)]
 async fn function_interface_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> Result<Json<FunctionInterface>, RfcError> {
-    let pool_clone = Arc::clone(&pool);
-    let result = tokio::task::spawn_blocking(move || {
-        pool_clone.with_connection(|conn| {
-            let param_infos = conn.get_param_infos(&name)?;
-            let params: Vec<FunctionParam> = param_infos
-                .iter()
-                .map(|p| {
-                    Ok(FunctionParam {
-                        name: p.name.clone(),
-                        type_name: rfctype_name(p.type_),
-                        direction: direction_name(p.direction),
-                        length: p.char_length,
-                        decimals: p.decimals,
-                        optional: p.optional,
-                        default: p.default_value.clone(),
-                        description: p.parameter_text.clone(),
-                        fields: param_info_to_field_def(p)?.fields,
-                    }) as Result<FunctionParam, RfcError>
-                })
-                .collect::<Result<_, _>>()?;
-            Ok(FunctionInterface {
-                name: name.clone(),
-                params,
-            }) as Result<FunctionInterface, RfcError>
+    crate::api::validate_func_name(&name)?;
+    let result = run_blocking(pool, move |conn| {
+        let param_infos = conn.get_param_infos(&name)?;
+        let params: Vec<FunctionParam> = param_infos
+            .iter()
+            .map(|p| {
+                Ok(FunctionParam {
+                    name: p.name.clone(),
+                    type_name: rfctype_name(p.type_),
+                    direction: direction_name(p.direction),
+                    length: p.char_length,
+                    decimals: p.decimals,
+                    optional: p.optional,
+                    default: p.default_value.clone(),
+                    description: p.parameter_text.clone(),
+                    fields: param_info_to_field_def(p)?.fields,
+                }) as Result<FunctionParam, RfcError>
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(FunctionInterface {
+            name: name.clone(),
+            params,
         })
     })
-    .await
-    .map_err(|e| RfcError {
-        code: -1,
-        message: format!("阻塞任务失败: {}", e),
-        key: String::new(),
-    })??;
+    .await?;
     Ok(Json(result))
 }
 
 /// ② POST /api/functions/search —— 搜索函数模块
-#[derive(serde::Deserialize, utoipa::ToSchema)]
+#[derive(serde::Deserialize)]
 pub(crate) struct SearchRequest {
     /// 函数名通配符，如 "BAPI_USER_*"
     #[serde(default)]
@@ -377,34 +241,16 @@ pub(crate) struct SearchRequest {
     max_results: Option<usize>,
 }
 /// ② POST /api/functions/search —— 搜索函数模块
-#[utoipa::path(
-    post,
-    path = "/api/functions/search",
-    tag = "元数据查询",
-    request_body = SearchRequest,
-    responses(
-        (status = 200, description = "搜索结果", body = SearchResponse),
-        (status = 500, description = "搜索失败", body = crate::error::ErrorResponse)
-    )
-)]
 async fn search_functions_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
     Json(req): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, RfcError> {
-    let max = req.max_results.unwrap_or(50);
+    let max = req.max_results.unwrap_or(50).min(500);
     let pattern = req.pattern.clone();
-    let pool_clone = Arc::clone(&pool);
-    let functions = tokio::task::spawn_blocking(move || {
-        pool_clone.with_connection(|conn| {
-            crate::discovery::search_functions(conn, &req.pattern, &req.group, max)
-        })
+    let functions = run_blocking(pool, move |conn| {
+        crate::discovery::search_functions(conn, &req.pattern, &req.group, max)
     })
-    .await
-    .map_err(|e| RfcError {
-        code: -1,
-        message: format!("阻塞任务失败: {}", e),
-        key: String::new(),
-    })??;
+    .await?;
     let count = functions.len();
     let functions = functions
         .into_iter()
@@ -422,31 +268,13 @@ async fn search_functions_handler(
 }
 
 /// ③ GET /api/ddic/type/:name —— 查 DDIC 结构/表的字段定义
-#[utoipa::path(
-    get,
-    path = "/api/ddic/type/{name}",
-    tag = "元数据查询",
-    params(("name" = String, Path, description = "DDIC 结构/表名")),
-    responses(
-        (status = 200, description = "字段定义", body = DdicTypeResponse),
-        (status = 500, description = "查询失败", body = crate::error::ErrorResponse)
-    )
-)]
 async fn ddic_type_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> Result<Json<DdicTypeResponse>, RfcError> {
     let req_name = name.clone();
-    let pool_clone = Arc::clone(&pool);
-    let result = tokio::task::spawn_blocking(move || {
-        pool_clone.with_connection(|conn| crate::metadata::get_type_fields(conn, &name))
-    })
-    .await
-    .map_err(|e| RfcError {
-        code: -1,
-        message: format!("阻塞任务失败: {}", e),
-        key: String::new(),
-    })??;
+    let result =
+        run_blocking(pool, move |conn| crate::metadata::get_type_fields(conn, &name)).await?;
     let fields = result.iter().map(FieldDef::from_type_field).collect();
     Ok(Json(DdicTypeResponse {
         name: req_name,
@@ -461,19 +289,6 @@ struct LangQuery {
     lang: Option<String>,
 }
 /// ④ GET /api/ddic/field/:table/:field —— 查字段的语义元数据（数据元素/域/固定值）
-#[utoipa::path(
-    get,
-    path = "/api/ddic/field/{table}/{field}",
-    tag = "元数据查询",
-    params(
-        ("table" = String, Path, description = "表/结构名"),
-        ("field" = String, Path, description = "字段名")
-    ),
-    responses(
-        (status = 200, description = "字段语义", body = FieldSemanticsResponse),
-        (status = 500, description = "查询失败", body = crate::error::ErrorResponse)
-    )
-)]
 async fn ddic_field_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
     axum::extract::Path((table, field)): axum::extract::Path<(String, String)>,
@@ -481,17 +296,10 @@ async fn ddic_field_handler(
 ) -> Result<Json<FieldSemanticsResponse>, RfcError> {
     let lang = q.lang.unwrap_or_else(default_lang);
     let req_table = table.clone();
-    let pool_clone = Arc::clone(&pool);
-    let sem = tokio::task::spawn_blocking(move || {
-        pool_clone
-            .with_connection(|conn| crate::discovery::read_ddic_field_info(conn, &table, &field, &lang))
+    let sem = run_blocking(pool, move |conn| {
+        crate::discovery::read_ddic_field_info(conn, &table, &field, &lang)
     })
-    .await
-    .map_err(|e| RfcError {
-        code: -1,
-        message: format!("阻塞任务失败: {}", e),
-        key: String::new(),
-    })??;
+    .await?;
     Ok(Json(FieldSemanticsResponse {
         table: req_table,
         field: sem.field,
@@ -512,56 +320,124 @@ async fn ddic_field_handler(
 }
 
 /// ⑤ GET /api/functions/:name/doc —— 查函数文档（短文本 + SE37 长文本 + 参数说明）
-#[utoipa::path(
-    get,
-    path = "/api/functions/{name}/doc",
-    tag = "元数据查询",
-    params(("name" = String, Path, description = "函数模块名")),
-    responses(
-        (status = 200, description = "函数文档", body = FunctionDocResponse),
-        (status = 500, description = "查询失败", body = crate::error::ErrorResponse)
-    )
-)]
 async fn function_doc_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
     axum::extract::Path(name): axum::extract::Path<String>,
     axum::extract::Query(q): axum::extract::Query<LangQuery>,
 ) -> Result<Json<FunctionDocResponse>, RfcError> {
+    crate::api::validate_func_name(&name)?;
     let lang = q.lang.unwrap_or_else(default_lang);
-    let pool_clone = Arc::clone(&pool);
-    let result = tokio::task::spawn_blocking(move || {
-        pool_clone.with_connection(|conn| {
-            // 先取参数描述（parameterText 作为参数文档），同时取短文本
-            let param_infos = conn.get_param_infos(&name)?;
-            let parameter_docs: Vec<ParamDoc> = param_infos
-                .iter()
-                .filter(|p| !p.parameter_text.is_empty())
-                .map(|p| ParamDoc {
-                    name: p.name.clone(),
-                    text: p.parameter_text.clone(),
-                })
-                .collect();
-            // 短文本：从任一参数的描述或元数据取（此处用首个参数描述作 fallback）
-            let short_text = param_infos
-                .first()
-                .map(|p| p.parameter_text.clone())
-                .unwrap_or_default();
-            // 读 SE37 长文档（失败降级为空 + warning）
-            let doc = crate::discovery::read_function_doc(conn, &name, &lang, &short_text)?;
-            Ok(FunctionDocResponse {
-                name: name.clone(),
-                short_text: doc.short_text,
-                long_text: doc.long_text,
-                warning: doc.warning,
-                parameter_docs,
-            }) as Result<FunctionDocResponse, RfcError>
+    let result = run_blocking(pool, move |conn| {
+        // 先取参数描述（parameterText 作为参数文档），同时取短文本
+        let param_infos = conn.get_param_infos(&name)?;
+        let parameter_docs: Vec<ParamDoc> = param_infos
+            .iter()
+            .filter(|p| !p.parameter_text.is_empty())
+            .map(|p| ParamDoc {
+                name: p.name.clone(),
+                text: p.parameter_text.clone(),
+            })
+            .collect();
+        // 短文本：从任一参数的描述或元数据取（此处用首个参数描述作 fallback）
+        let short_text = param_infos
+            .first()
+            .map(|p| p.parameter_text.clone())
+            .unwrap_or_default();
+        // 读 SE37 长文档（失败降级为空 + warning）
+        let doc = crate::discovery::read_function_doc(conn, &name, &lang, &short_text)?;
+        Ok(FunctionDocResponse {
+            name: name.clone(),
+            short_text: doc.short_text,
+            long_text: doc.long_text,
+            warning: doc.warning,
+            parameter_docs,
         })
     })
-    .await
-    .map_err(|e| RfcError {
-        code: -1,
-        message: format!("阻塞任务失败: {}", e),
-        key: String::new(),
-    })??;
+    .await?;
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    /// 读取 axum 响应 body 为 String
+    async fn body_string(body: axum::body::Body) -> String {
+        let bytes = body.collect().await.unwrap().to_bytes();
+        String::from_utf8_lossy(&bytes).to_string()
+    }
+
+    #[tokio::test]
+    async fn health_returns_ok() {
+        let resp = static_app()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/health")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let body = body_string(resp.into_body()).await;
+        assert!(body.contains("\"status\":\"ok\""));
+    }
+
+    #[tokio::test]
+    async fn agents_md_returns_markdown() {
+        let resp = static_app()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/agents.md")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let ct = resp.headers().get(axum::http::header::CONTENT_TYPE).unwrap();
+        assert!(ct.to_str().unwrap().contains("text/markdown"));
+        let body = body_string(resp.into_body()).await;
+        assert!(!body.is_empty());
+        // 内容应包含项目名（验证编译期嵌入成功）
+        assert!(body.contains("rust_sap_rfc") || body.contains("SAP"));
+    }
+
+    #[tokio::test]
+    async fn index_html_replaces_base_url_from_host_header() {
+        let resp = static_app()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/")
+                    .header("host", "192.168.1.5:9999")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let body = body_string(resp.into_body()).await;
+        // Host 头应被替换进模板（不再含占位符）
+        assert!(!body.contains("{{BASE_URL}}"));
+        assert!(!body.contains("{{AGENTS_URL}}"));
+        assert!(body.contains("http://192.168.1.5:9999"));
+    }
+
+    #[tokio::test]
+    async fn index_html_defaults_when_no_host_header() {
+        let resp = static_app()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let body = body_string(resp.into_body()).await;
+        assert!(body.contains("http://127.0.0.1:3000"));
+    }
 }

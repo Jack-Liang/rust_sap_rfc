@@ -45,6 +45,15 @@ impl RfcConnection {
             );
 
             check_rc(error_info.code, &error_info)?;
+            // SDK 在异常情况下可能 code==OK 但返回 null 句柄，需防御
+            if handle.is_null() {
+                return Err(RfcError {
+                    code: error_info.code,
+                    message: "RfcOpenConnection 返回 null 句柄".into(),
+                    key: crate::string_utils::sap_uc_to_string(error_info.key.as_ptr(), 128),
+                    ..Default::default()
+                });
+            }
             Ok(Self { handle })
         }
     }
@@ -56,6 +65,13 @@ impl RfcConnection {
             let mut error_info = std::mem::zeroed::<RFC_ERROR_INFO>();
             let func_handle = RfcCreateFunction(func_desc, &mut error_info);
             check_rc(error_info.code, &error_info)?;
+            if func_handle.is_null() {
+                return Err(RfcError {
+                    code: error_info.code,
+                    message: "RfcCreateFunction 返回 null 句柄".into(),
+                    ..Default::default()
+                });
+            }
 
             Ok(RfcFunction {
                 handle: func_handle,
@@ -73,6 +89,13 @@ impl RfcConnection {
         let name_uc = str_to_sap_uc(func_name);
         let func_desc = RfcGetFunctionDesc(self.handle, name_uc.as_ptr(), &mut error_info);
         check_rc(error_info.code, &error_info)?;
+        if func_desc.is_null() {
+            return Err(RfcError {
+                code: error_info.code,
+                message: format!("RfcGetFunctionDesc 返回 null 句柄 (函数: {})", func_name),
+                ..Default::default()
+            });
+        }
         Ok(func_desc)
     }
 
@@ -137,6 +160,7 @@ impl RfcConnection {
                     code: error_info.code,
                     message: format!("DDIC 类型 [{}] 未找到或无字段定义", type_name),
                     key: crate::string_utils::sap_uc_to_string(error_info.key.as_ptr(), 128),
+                    ..Default::default()
                 });
             }
             Ok(type_handle)

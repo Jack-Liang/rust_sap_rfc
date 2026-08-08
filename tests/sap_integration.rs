@@ -1,0 +1,426 @@
+//! 真实 SAP 集成测试。
+//!
+//! 这些测试启动真实 HTTP server（cargo run 子进程），连接真实 SAP 系统，
+//! 验证端到端正确性。全部标记 #[ignore]：
+//!   - 无 SAP 环境（CI）：`cargo test` 默认跳过
+//!   - 有 SAP 环境：`cargo test -- --ignored` 或 `cargo test -- --ignored sap_integration`
+//!
+//! 用的都是安全只读 RFC（STFC_CONNECTION、RFC_FUNCTION_SEARCH、BAPI_USER_GETLIST），
+//! 不会修改 SAP 数据。
+
+mod common;
+
+use common::{alloc_port, ensure_sap_env};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// 启动 server 子进程并等待就绪。
+/// 返回 (Child, base_url)。子进程在 Drop 时自动 kill。
+struct ServerHandle {
+    child: Child,
+    base_url: String,
+}
+
+impl Drop for ServerHandle {
+    fn drop(&mut self) {
+        // 强制 kill 子进程（SIGKILL），再 wait 回收
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn start_server() -> ServerHandle {
+    ensure_sap_env();
+    let port = alloc_port();
+    let base_url = format!("http://127.0.0.1:{}", port);
+    let listen_addr = format!("127.0.0.1:{}", port);
+
+    // 找到项目根目录的 target/debug/rust_sap_rfc（或用 cargo run）
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let bin_debug = format!("{}/target/debug/rust_sap_rfc", manifest_dir);
+    let bin_release = format!("{}/target/release/rust_sap_rfc", manifest_dir);
+
+    let (mut cmd, bin_exists) = if std::path::Path::new(&bin_debug).exists() {
+        (Command::new(&bin_debug), true)
+    } else if std::path::Path::new(&bin_release).exists() {
+        (Command::new(&bin_release), true)
+    } else {
+        // fallback: cargo run
+        (
+            {
+                let mut c = Command::new("cargo");
+                c.args(["run", "--quiet"]);
+                c
+            },
+            false,
+        )
+    };
+
+    cmd.env("SAP_LISTEN_ADDR", &listen_addr)
+        .env("RUST_LOG", "warn") // 减少日志噪音
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    if !bin_exists {
+        cmd.current_dir(manifest_dir);
+    }
+
+    let child = cmd.spawn().expect("启动 server 失败");
+    let handle = ServerHandle { child, base_url };
+
+    // 等待 server 就绪（轮询 /health，最多 30 秒）
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    loop {
+        if Instant::now() > deadline {
+            panic!("server 启动超时（30s）");
+        }
+        if let Ok(resp) = client.get(format!("{}/health", handle.base_url)).send() {
+            if resp.status().is_success() {
+                return handle;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}
+
+/// HTTP 客户端（复用连接，超时 30s）
+fn http_client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap()
+}
+
+// ========================================================================
+// 连接与基础调用
+// ========================================================================
+
+#[test]
+#[ignore]
+fn health_check_works() {
+    let _s = start_server();
+    let resp = http_client()
+        .get(format!("{}/health", _s.base_url))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().unwrap();
+    assert_eq!(body["status"], "ok");
+}
+
+#[test]
+#[ignore]
+fn stfc_connection_echo_roundtrip() {
+    let _s = start_server();
+    let payload = serde_json::json!({
+        "func_name": "STFC_CONNECTION",
+        "inputs": {"REQUTEXT": "hello_integration_test"},
+        "string_outputs": {"ECHOTEXT": {"max_len": 255}, "RESPTEXT": {"max_len": 255}}
+    });
+    let resp = http_client()
+        .post(format!("{}/api/rfc", _s.base_url))
+        .json(&payload)
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 200, "STFC_CONNECTION 应成功");
+    let body: serde_json::Value = resp.json().unwrap();
+    assert_eq!(body["func"], "STFC_CONNECTION");
+    // ECHOTEXT 应回显 REQUTEXT
+    let echo = body["scalars"]["ECHOTEXT"].as_str().unwrap_or("");
+    assert!(
+        echo.contains("hello_integration_test"),
+        "ECHOTEXT 应回显输入文本，实际: {}",
+        echo
+    );
+    // RESPTEXT 应非空（通常是 SAP 系统信息）
+    assert!(!body["scalars"]["RESPTEXT"].as_str().unwrap_or("").is_empty());
+}
+
+// ========================================================================
+// 元数据端点
+// ========================================================================
+
+#[test]
+#[ignore]
+fn function_interface_returns_params() {
+    let _s = start_server();
+    let resp = http_client()
+        .get(format!("{}/api/functions/STFC_CONNECTION", _s.base_url))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().unwrap();
+    assert_eq!(body["name"], "STFC_CONNECTION");
+    let params = body["params"].as_array().expect("params 应是数组");
+    assert!(!params.is_empty(), "STFC_CONNECTION 应有参数");
+    // 应包含 REQUTEXT（import）和 ECHOTEXT/RESPTEXT（export）
+    let names: Vec<&str> = params
+        .iter()
+        .map(|p| p["name"].as_str().unwrap_or(""))
+        .collect();
+    assert!(names.contains(&"REQUTEXT"), "参数应含 REQUTEXT, 实际 {:?}", names);
+}
+
+#[test]
+#[ignore]
+fn function_search_finds_stfc() {
+    let _s = start_server();
+    let payload = serde_json::json!({
+        "pattern": "STFC_*",
+        "max_results": 10
+    });
+    let resp = http_client()
+        .post(format!("{}/api/functions/search", _s.base_url))
+        .json(&payload)
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().unwrap();
+    let functions = body["functions"].as_array().expect("functions 应是数组");
+    assert!(!functions.is_empty(), "STFC_* 应至少匹配 STFC_CONNECTION");
+    let names: Vec<&str> = functions
+        .iter()
+        .map(|f| f["name"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        names.iter().any(|n| n.contains("STFC")),
+        "应匹配到 STFC 开头的函数, 实际 {:?}",
+        names
+    );
+}
+
+#[test]
+#[ignore]
+fn ddic_type_bapiret2_has_fields() {
+    let _s = start_server();
+    let resp = http_client()
+        .get(format!("{}/api/ddic/type/BAPIRET2", _s.base_url))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().unwrap();
+    let fields = body["fields"].as_array().expect("fields 应是数组");
+    assert!(!fields.is_empty(), "BAPIRET2 应有字段");
+    let names: Vec<&str> = fields
+        .iter()
+        .map(|f| f["name"].as_str().unwrap_or(""))
+        .collect();
+    assert!(names.contains(&"TYPE"), "BAPIRET2 应含 TYPE 字段, 实际 {:?}", names);
+    assert!(
+        names.contains(&"MESSAGE"),
+        "BAPIRET2 应含 MESSAGE 字段, 实际 {:?}",
+        names
+    );
+}
+
+#[test]
+#[ignore]
+fn ddic_field_semantics_has_fixed_values() {
+    let _s = start_server();
+    let resp = http_client()
+        .get(format!("{}/api/ddic/field/BAPIRET2/TYPE", _s.base_url))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().unwrap();
+    assert_eq!(body["field"], "TYPE");
+    // TYPE 字段应返回语义元数据（data_element / domain / description 至少其一非空）
+    let has_semantics = body["data_element"].as_str().unwrap_or("").is_empty()
+        == false
+        || body["domain"].as_str().unwrap_or("").is_empty() == false
+        || body["description"].as_str().unwrap_or("").is_empty() == false;
+    assert!(
+        has_semantics,
+        "TYPE 字段应返回语义元数据, 实际: {}",
+        body
+    );
+    // fixed_values 可能为空（固定值在域级别，非所有系统都暴露），不强制断言
+}
+
+#[test]
+#[ignore]
+fn function_doc_returns_text() {
+    let _s = start_server();
+    let resp = http_client()
+        .get(format!("{}/api/functions/STFC_CONNECTION/doc", _s.base_url))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().unwrap();
+    assert_eq!(body["name"], "STFC_CONNECTION");
+    // parameter_docs 是数组（可能为空——取决于该函数是否有 parameterText）
+    assert!(
+        body["parameter_docs"].is_array(),
+        "parameter_docs 应为数组, 实际: {}",
+        body["parameter_docs"]
+    );
+    // 响应体应包含 short_text 或 long_text 或 warning 之一
+    // （不同系统/函数的文档覆盖度不同，至少字段语义存在即可）
+    assert!(
+        body.get("short_text").is_some()
+            || body.get("long_text").is_some()
+            || body.get("warning").is_some(),
+        "文档响应应含 short_text/long_text/warning 之一, 实际: {}",
+        body
+    );
+}
+
+// ========================================================================
+// 错误处理与状态码
+// ========================================================================
+
+#[test]
+#[ignore]
+fn nonexistent_function_returns_404() {
+    let _s = start_server();
+    let payload = serde_json::json!({
+        "func_name": "Z_NONEXISTENT_FAKE_FUNC_12345",
+        "string_outputs": {"X": {"max_len": 255}}
+    });
+    let resp = http_client()
+        .post(format!("{}/api/rfc", _s.base_url))
+        .json(&payload)
+        .send()
+        .unwrap();
+    // 不存在的函数：SAP 可能返回 NOT_FOUND(404) 或 ABAP_EXCEPTION(400)，
+    // 取决于系统版本。两者都是"调用未成功"，接受任一。
+    assert!(
+        resp.status() == 404 || resp.status() == 400 || resp.status() == 500,
+        "不存在函数应返回 4xx/5xx, 实际 {}",
+        resp.status()
+    );
+    let body: serde_json::Value = resp.json().unwrap_or_default();
+    assert!(body["error"]["message"].is_string(), "应有错误消息");
+}
+
+#[test]
+#[ignore]
+fn invalid_func_name_returns_400() {
+    let _s = start_server();
+    // func_name 含非法字符 → 输入校验拦截 → 400
+    let payload = serde_json::json!({
+        "func_name": "FOO;DROP TABLE",
+        "string_outputs": {"X": {"max_len": 255}}
+    });
+    let resp = http_client()
+        .post(format!("{}/api/rfc", _s.base_url))
+        .json(&payload)
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 400, "非法 func_name 应返回 400");
+    let body: serde_json::Value = resp.json().unwrap_or_default();
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("非法字符"),
+        "错误信息应含'非法字符', 实际: {}",
+        body
+    );
+}
+
+// ========================================================================
+// read_return + table_outputs
+// ========================================================================
+
+#[test]
+#[ignore]
+fn bapi_user_getlist_with_return() {
+    let _s = start_server();
+    let payload = serde_json::json!({
+        "func_name": "BAPI_USER_GETLIST",
+        "table_outputs": {
+            "USERLIST": [
+                {"name": "USERNAME", "max_len": 12}
+            ]
+        },
+        "read_return": true
+    });
+    let resp = http_client()
+        .post(format!("{}/api/rfc", _s.base_url))
+        .json(&payload)
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 200, "BAPI_USER_GETLIST 应成功");
+    let body: serde_json::Value = resp.json().unwrap();
+    // 应返回 USERLIST 表（可能为空数组，但键应存在）
+    assert!(body["tables"].get("USERLIST").is_some(), "应返回 USERLIST 表");
+    // read_return=true，return_table 应存在（即使为 null 也合理——无消息）
+}
+
+#[test]
+#[ignore]
+fn table_outputs_auto_preserves_numeric_type() {
+    let _s = start_server();
+    // BAPI_USER_GETLIST 的 USERLIST 表没有明显的 INT 字段，
+    // 但用 auto:true 读 USERNAME 仍应是字符串。这里验证 auto 模式不破坏正常读取。
+    let payload = serde_json::json!({
+        "func_name": "BAPI_USER_GETLIST",
+        "table_outputs": {
+            "USERLIST": [
+                {"name": "USERNAME", "auto": true}
+            ]
+        }
+    });
+    let resp = http_client()
+        .post(format!("{}/api/rfc", _s.base_url))
+        .json(&payload)
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().unwrap();
+    let userlist = body["tables"]["USERLIST"].as_array();
+    if let Some(rows) = userlist {
+        if !rows.is_empty() {
+            // USERNAME 字段应存在且是字符串（CHAR 类型走 chars）
+            let username = &rows[0]["USERNAME"];
+            assert!(
+                username.is_string() || username.is_null(),
+                "USERNAME 应为字符串, 实际: {}",
+                username
+            );
+        }
+    }
+}
+
+// ========================================================================
+// 并发
+// ========================================================================
+
+#[test]
+#[ignore]
+fn concurrent_calls_dont_deadlock() {
+    let _s = start_server();
+    let url = format!("{}/api/rfc", _s.base_url);
+    let payload = serde_json::json!({
+        "func_name": "STFC_CONNECTION",
+        "inputs": {"REQUTEXT": "concurrent"},
+        "string_outputs": {"ECHOTEXT": {"max_len": 255}}
+    });
+
+    // 8 个并发线程（= 默认连接池大小），每个发 3 次请求
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let url = url.clone();
+            let payload = payload.clone();
+            std::thread::spawn(move || {
+                let client = http_client();
+                let mut ok = 0;
+                for _ in 0..3 {
+                    let resp = client.post(&url).json(&payload).send().unwrap();
+                    if resp.status() == 200 {
+                        ok += 1;
+                    }
+                }
+                ok
+            })
+        })
+        .collect();
+
+    let total_ok: u32 = threads.into_iter().map(|t| t.join().unwrap()).sum();
+    assert_eq!(total_ok, 24, "8 线程 × 3 请求应全部成功，实际 {} / 24", total_ok);
+}

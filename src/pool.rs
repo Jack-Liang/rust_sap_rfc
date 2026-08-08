@@ -27,6 +27,11 @@ fn should_discard(err: &RfcError) -> bool {
     RECONNECT_RC.contains(&err.code)
 }
 
+/// 单次 wait_timeout 的等待时长（让循环定期醒来检查池状态）。
+const WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// acquire 的总等待上限：超过则返回错误，避免池耗尽时调用方永久挂起。
+const ACQUIRE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// 池的内部可变状态：空闲连接栈 + 当前总连接数。
 struct PoolInner {
     idle: Vec<RfcConnection>,
@@ -118,8 +123,11 @@ impl RfcConnectionPool {
     }
 
     /// 借出一个连接：优先 pop 空闲；无空闲且未达上限则新建；达上限则等待。
+    ///
+    /// 等待有总超时上限（ACQUIRE_TIMEOUT），避免池耗尽时调用方永久挂起。
     fn acquire(&self) -> Result<RfcConnection, RfcError> {
         let mut guard = self.inner.lock().map_err(|e| poison_err("连接池锁", e))?;
+        let deadline = std::time::Instant::now() + ACQUIRE_TIMEOUT;
         loop {
             // 有空闲：直接 pop
             if let Some(conn) = guard.idle.pop() {
@@ -142,10 +150,22 @@ impl RfcConnectionPool {
                     }
                 }
             }
-            // 已达上限且无空闲：等待归还
+            // 已达上限且无空闲：等待归还（累计不超过 ACQUIRE_TIMEOUT）
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Err(RfcError {
+                    code: -1,
+                    message: format!(
+                        "从连接池获取连接超时（等待 {:?}，池上限 {} 已耗尽）",
+                        ACQUIRE_TIMEOUT, self.max_size
+                    ),
+                    ..Default::default()
+                });
+            }
+            let wait_slice = deadline.saturating_duration_since(now).min(WAIT_TIMEOUT);
             guard = self
                 .cv
-                .wait_timeout(guard, std::time::Duration::from_secs(30))
+                .wait_timeout(guard, wait_slice)
                 .map_err(|e| poison_err("连接池等待", e))?
                 .0;
         }
@@ -170,7 +190,18 @@ impl RfcConnectionPool {
             guard.total -= 1; // 旧连接销毁，腾出配额
         }
         // 新建并放回空闲栈
-        let new_conn = self.create_connection()?;
+        let new_conn = match self.create_connection() {
+            Ok(c) => c,
+            Err(e) => {
+                // 新建失败：把 total 加回，避免池容量永久缩水
+                if let Ok(mut guard) = self.inner.lock() {
+                    guard.total += 1;
+                }
+                // 唤醒等待者让他们也重试/失败
+                self.cv.notify_one();
+                return Err(e);
+            }
+        };
         {
             let mut guard = self.inner.lock().map_err(|e| poison_err("连接池锁", e))?;
             guard.total += 1;
@@ -194,6 +225,7 @@ fn poison_err<T>(ctx: &str, _e: T) -> RfcError {
         code: -1,
         message: format!("{}被毒化", ctx),
         key: String::new(),
+        ..Default::default()
     }
 }
 
@@ -202,3 +234,32 @@ fn poison_err<T>(ctx: &str, _e: T) -> RfcError {
 // NWRFC SDK 允许不同连接对象在不同线程并发使用。
 unsafe impl Send for RfcConnectionPool {}
 unsafe impl Sync for RfcConnectionPool {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_discard_for_communication_errors() {
+        // RECONNECT_RC = [1, 2, 3, 22]
+        for rc in [1i32, 2, 3, 22] {
+            let err = RfcError {
+                code: rc,
+                ..Default::default()
+            };
+            assert!(should_discard(&err), "code={} 应触发丢弃重连", rc);
+        }
+    }
+
+    #[test]
+    fn should_not_discard_for_non_communication_errors() {
+        // 非 RECONNECT_RC 的码不丢弃（连接仍健康）
+        for rc in [0i32, 5, 7, 9, 17, 20, 23, 25, -1] {
+            let err = RfcError {
+                code: rc,
+                ..Default::default()
+            };
+            assert!(!should_discard(&err), "code={} 不应触发丢弃", rc);
+        }
+    }
+}

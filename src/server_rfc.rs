@@ -56,6 +56,7 @@ fn install_handlers(cfg: &ServerConfig) -> Result<Vec<RFC_FUNCTION_DESC_HANDLE>,
         code: -1,
         message: format!("handler 锁毒化: {}", e),
         key: String::new(),
+        ..Default::default()
     })?;
 
     for f in &cfg.functions {
@@ -88,6 +89,7 @@ fn install_handlers(cfg: &ServerConfig) -> Result<Vec<RFC_FUNCTION_DESC_HANDLE>,
                 code: rc,
                 message: format!("RfcInstallServerFunction 失败: {}", f.name),
                 key: String::new(),
+                ..Default::default()
             });
         }
         tracing::info!(func = %f.name, webhook = %f.webhook_url, "已注册 server 函数");
@@ -107,7 +109,8 @@ unsafe fn create_function_desc(name: &str) -> Result<RFC_FUNCTION_DESC_HANDLE, R
             code: err.code,
             message: sap_uc_to_string(err.message.as_ptr(), 256),
             key: sap_uc_to_string(err.key.as_ptr(), 64),
-        });
+            ..Default::default()
+                    });
     }
     Ok(h)
 }
@@ -124,12 +127,14 @@ unsafe fn add_parameter(desc: RFC_FUNCTION_DESC_HANDLE, p: &ParamDef) -> Result<
         code: -1,
         message: e,
         key: String::new(),
-    })?;
+        ..Default::default()
+                })?;
     pdesc.direction = p.direction_mask().map_err(|e| RfcError {
         code: -1,
         message: e,
         key: String::new(),
-    })?;
+        ..Default::default()
+                })?;
     // charLength = ucLength/2；ucLength 用字节（2 bytes/SAP_CHAR）
     if let Some(len) = p.length {
         pdesc.ucLength = (len * 2) as u32;
@@ -149,6 +154,7 @@ unsafe fn add_parameter(desc: RFC_FUNCTION_DESC_HANDLE, p: &ParamDef) -> Result<
                 sap_uc_to_string(err.message.as_ptr(), 256)
             ),
             key: String::new(),
+            ..Default::default()
         });
     }
     Ok(())
@@ -193,12 +199,14 @@ fn handle_call(func_handle: RFC_FUNCTION_HANDLE) -> Result<(), RfcError> {
             code: -1,
             message: format!("handler 锁毒化: {}", e),
             key: String::new(),
+            ..Default::default()
         })?;
         map.get(&func_name.to_uppercase())
             .ok_or_else(|| RfcError {
                 code: RFC_NOT_FOUND_ENUM,
                 message: format!("未注册的函数: {}", func_name),
                 key: String::new(),
+                ..Default::default()
             })?
             .clone_entry()
     };
@@ -244,7 +252,8 @@ unsafe fn get_func_name(func_handle: RFC_FUNCTION_HANDLE) -> Result<String, RfcE
             code: err.code,
             message: "RfcDescribeFunction 失败".into(),
             key: String::new(),
-        });
+            ..Default::default()
+                    });
     }
     let mut buf = [0u16; 31]; // RFC_ABAP_NAME 长度
     let rc = RfcGetFunctionName(desc, buf.as_mut_ptr(), &mut err);
@@ -253,7 +262,8 @@ unsafe fn get_func_name(func_handle: RFC_FUNCTION_HANDLE) -> Result<String, RfcE
             code: rc,
             message: "RfcGetFunctionName 失败".into(),
             key: String::new(),
-        });
+            ..Default::default()
+                    });
     }
     Ok(sap_uc_to_string(buf.as_ptr(), 30))
 }
@@ -318,6 +328,7 @@ fn write_outputs(
                         sap_uc_to_string(err.message.as_ptr(), 256)
                     ),
                     key: String::new(),
+                    ..Default::default()
                 });
             }
         }
@@ -327,12 +338,31 @@ fn write_outputs(
 
 /// 把 UTF-8 错误消息写入 SAP UC 缓冲区（0 终止）
 unsafe fn write_msg_to_uc_buf(buf: &mut [SAP_UC], msg: &str) {
+    if buf.is_empty() {
+        return; // 防御：空 buf 无法写入，避免 buf.len()-1 下溢
+    }
     let uc: Vec<u16> = msg.encode_utf16().collect();
     let copy_len = uc.len().min(buf.len() - 1);
     buf[..copy_len].copy_from_slice(&uc[..copy_len]);
     if copy_len < buf.len() {
         buf[copy_len] = 0;
     }
+}
+
+/// 全局复用的 HTTP 客户端（避免每次回调重建连接池/TLS 上下文）。
+/// reqwest::blocking::Client 内部自带连接池，线程安全可跨 dispatch 调用复用。
+/// 构造失败时用默认 Client 兜底（不 panic，避免毒化 OnceLock 导致 server 永久不可用）。
+fn webhook_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|e| {
+                tracing::error!(error = %e, "webhook HTTP 客户端自定义构造失败，回退到默认 Client");
+                reqwest::blocking::Client::new()
+            })
+    })
 }
 
 /// 同步 POST 到 webhook
@@ -342,19 +372,13 @@ fn forward_to_webhook(
     inputs: HashMap<String, String>,
 ) -> Result<WebhookResponse, RfcError> {
     let req = WebhookRequest { func, inputs };
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| RfcError {
-            code: -1,
-            message: format!("HTTP 客户端构造失败: {}", e),
-            key: String::new(),
-        })?;
+    let client = webhook_client();
 
     let resp = client.post(url).json(&req).send().map_err(|e| RfcError {
         code: -1,
         message: format!("webhook 请求失败 ({}): {}", url, e),
         key: String::new(),
+        ..Default::default()
     })?;
 
     let resp_body = resp
@@ -363,12 +387,14 @@ fn forward_to_webhook(
             code: -1,
             message: format!("webhook 返回错误: {}", e),
             key: String::new(),
+            ..Default::default()
         })?
         .json::<WebhookResponse>()
         .map_err(|e| RfcError {
             code: -1,
             message: format!("webhook 响应解析失败: {}", e),
             key: String::new(),
+            ..Default::default()
         })?;
 
     Ok(resp_body)
@@ -430,6 +456,7 @@ fn register_gateway(
                     sap_uc_to_string(err.message.as_ptr(), 256)
                 ),
                 key: sap_uc_to_string(err.key.as_ptr(), 64),
+                ..Default::default()
             });
         }
         Ok(h)
@@ -458,5 +485,46 @@ fn dispatch_loop(handle: RFC_CONNECTION_HANDLE) {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_msg_to_uc_buf_writes_and_terminates() {
+        let mut buf = [0u16; 10];
+        unsafe { write_msg_to_uc_buf(&mut buf, "AB") };
+        // 前 2 个是字符，第 3 个是 0 终止符
+        assert_eq!(buf[0], b'A' as u16);
+        assert_eq!(buf[1], b'B' as u16);
+        assert_eq!(buf[2], 0);
+    }
+
+    #[test]
+    fn write_msg_to_uc_buf_truncates_long_message() {
+        let mut buf = [0u16; 5]; // 只能放 4 字符 + 终止符
+        unsafe { write_msg_to_uc_buf(&mut buf, "ABCDEFGH") };
+        // 应截断到 4 字符
+        assert_eq!(buf[0], b'A' as u16);
+        assert_eq!(buf[3], b'D' as u16);
+        assert_eq!(buf[4], 0); // 最后一个位置是终止符
+    }
+
+    #[test]
+    fn write_msg_to_uc_buf_empty_buffer_no_panic() {
+        // 空 buf 不应 panic（buf.len()-1 下溢防御）
+        let mut buf: [u16; 0] = [];
+        unsafe { write_msg_to_uc_buf(&mut buf, "X") };
+        // 能到这里就说明没 panic
+    }
+
+    #[test]
+    fn write_msg_to_uc_buf_empty_message() {
+        let mut buf = [99u16; 4];
+        unsafe { write_msg_to_uc_buf(&mut buf, "") };
+        // 空消息：copy_len=0，第一个位置写 0 终止符
+        assert_eq!(buf[0], 0);
     }
 }

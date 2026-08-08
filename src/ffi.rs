@@ -48,6 +48,7 @@ pub mod rfctype {
     pub const STRUCTURE: i32 = 17;
     pub const STRING: i32 = 29;
     pub const XSTRING: i32 = 30;
+    pub const INT8: i32 = 31;
 }
 pub use rfctype::{CHAR as RFCTYPE_CHAR, STRUCTURE as RFCTYPE_STRUCTURE, TABLE as RFCTYPE_TABLE};
 
@@ -371,4 +372,48 @@ pub struct RFC_FIELD_DESC {
     pub decimals: u32,
     pub typeDescHandle: RFC_TYPE_DESC_HANDLE,
     pub extendedDescription: *mut c_void,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 断言 RFCTYPE 常量值与 SAP NWRFC SDK 头文件枚举一致。
+    /// 这些值被 server_config / metadata / api 依赖，错误会导致类型派发全乱。
+    #[test]
+    fn rfctype_constants_match_sdk_header() {
+        assert_eq!(rfctype::CHAR, 0);
+        assert_eq!(rfctype::DATE, 1);
+        assert_eq!(rfctype::BCD, 2);
+        assert_eq!(rfctype::TIME, 3);
+        assert_eq!(rfctype::BYTE, 4);
+        assert_eq!(rfctype::TABLE, 5);
+        assert_eq!(rfctype::NUM, 6);
+        assert_eq!(rfctype::FLOAT, 7);
+        assert_eq!(rfctype::INT, 8);
+        assert_eq!(rfctype::INT2, 9);
+        assert_eq!(rfctype::INT1, 10);
+        assert_eq!(rfctype::STRUCTURE, 17);
+        assert_eq!(rfctype::STRING, 29);
+        assert_eq!(rfctype::XSTRING, 30);
+        assert_eq!(rfctype::INT8, 31);
+    }
+
+    #[test]
+    fn direction_constants_are_bitmasks() {
+        // RFC_DIRECTION 位掩码（sapnwrfc.h）
+        assert_eq!(RFC_DIRECTION_IMPORT, 0x01);
+        assert_eq!(RFC_DIRECTION_EXPORT, 0x02);
+        assert_eq!(RFC_DIRECTION_CHANGING, 0x03); // IMPORT | EXPORT
+        assert_eq!(RFC_DIRECTION_TABLES, 0x07);
+    }
+
+    #[test]
+    fn rc_constants_match_sdk_enum() {
+        assert_eq!(RFC_OK, 0);
+        assert_eq!(RFC_BUFFER_TOO_SMALL, 29);
+        assert_eq!(RFC_RETRY, 15);
+        assert_eq!(RFC_CLOSED, 7);
+        assert_eq!(RFC_EXTERNAL_FAILURE, 16);
+    }
 }

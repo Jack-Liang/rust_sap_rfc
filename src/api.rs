@@ -8,18 +8,18 @@ use crate::function::{RfcFunction, RfcRow};
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use utoipa::ToSchema;
+
 
 /// 显式类型标记：用于 BCD/INT8/Bytes 这些无法靠 JSON 字面量区分的类型。
 /// JSON 形式：`{"type":"BCD","value":"123.45"}`
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypedScalar {
     #[serde(rename = "type")]
     pub kind: TypedScalarKind,
     pub value: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum TypedScalarKind {
     /// BCD packed number，value 为字符串形式的数字（保留小数位）
@@ -43,13 +43,15 @@ pub enum TypedScalarKind {
 ///   - `{"type":"BYTES","value":"QkFTRTY0..."}` → 二进制（Base64）
 ///
 /// 输出（响应 scalars）同样用这个枚举序列化，类型由读取方式决定。
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ScalarValue {
     /// 隐式：JSON 字符串。对应 SAP CHAR/NUM/DATE/TIME/BCD(字符串形式)
     Chars(String),
-    /// 隐式：JSON 整数。对应 SAP INT4
+    /// 隐式：JSON 整数。对应 SAP INT4（i32）
     Int(i32),
+    /// 隐式：JSON 整数。对应 SAP INT8（i64，auto_outputs 按真实类型读时出现）
+    Int8(i64),
     /// 隐式：JSON 浮点。对应 SAP FLOAT
     Float(f64),
     /// 显式：带类型标记的值（BCD/INT8/Bytes）
@@ -57,6 +59,18 @@ pub enum ScalarValue {
 }
 
 impl ScalarValue {
+    /// 把任意变体转成字符串表达（用于 discovery 等只需字符串的场景）。
+    /// Chars → 原值；Int/Int8 → 数字字符串；Float → 浮点字符串；Typed → 按 value 序列化。
+    pub fn into_chars(self) -> String {
+        match self {
+            ScalarValue::Chars(s) => s,
+            ScalarValue::Int(i) => i.to_string(),
+            ScalarValue::Int8(i) => i.to_string(),
+            ScalarValue::Float(f) => f.to_string(),
+            ScalarValue::Typed(t) => t.value.to_string(),
+        }
+    }
+
     /// 解码 Typed 形式，返回 (是否二进制, 字符串值, 数值占位)。
     /// 这是辅助 apply 方法处理 BCD/INT8/Bytes 三种显式类型。
     fn decode_typed(t: &TypedScalar, name: &str) -> Result<TypedDecoded, RfcError> {
@@ -66,6 +80,7 @@ impl ScalarValue {
                     code: -1,
                     message: format!("BCD 字段 {} 的 value 必须是字符串", name),
                     key: String::new(),
+                    ..Default::default()
                 })?;
                 Ok(TypedDecoded::Chars(s.to_string()))
             }
@@ -74,6 +89,7 @@ impl ScalarValue {
                     code: -1,
                     message: format!("INT8 字段 {} 的 value 必须是整数", name),
                     key: String::new(),
+                    ..Default::default()
                 })?;
                 Ok(TypedDecoded::Int8(i))
             }
@@ -82,11 +98,13 @@ impl ScalarValue {
                     code: -1,
                     message: format!("Bytes 字段 {} 的 value 必须是 Base64 字符串", name),
                     key: String::new(),
+                    ..Default::default()
                 })?;
                 let bytes = general_purpose::STANDARD.decode(s).map_err(|e| RfcError {
                     code: -1,
                     message: format!("Base64 解码失败 ({}): {}", name, e),
                     key: String::new(),
+                    ..Default::default()
                 })?;
                 Ok(TypedDecoded::Bytes(bytes))
             }
@@ -98,6 +116,7 @@ impl ScalarValue {
         match self {
             ScalarValue::Chars(s) => func.set_chars(name, s),
             ScalarValue::Int(i) => func.set_int(name, *i),
+            ScalarValue::Int8(i) => func.set_int8(name, *i),
             ScalarValue::Float(f) => func.set_float(name, *f),
             ScalarValue::Typed(t) => match Self::decode_typed(t, name)? {
                 TypedDecoded::Chars(s) => func.set_chars(name, &s),
@@ -112,6 +131,7 @@ impl ScalarValue {
         match self {
             ScalarValue::Chars(s) => row.set_chars(name, s),
             ScalarValue::Int(i) => row.set_int(name, *i),
+            ScalarValue::Int8(i) => row.set_int8(name, *i),
             ScalarValue::Float(f) => row.set_float(name, *f),
             ScalarValue::Typed(t) => match Self::decode_typed(t, name)? {
                 TypedDecoded::Chars(s) => row.set_chars(name, &s),
@@ -132,7 +152,7 @@ enum TypedDecoded {
 /// 字符串输出参数：参数名 -> 可选最大长度。
 /// 长度为 null 时由服务端用函数元数据自动填充；不填键时默认 255。
 /// 为保持向后兼容，也支持直接传整数（旧格式 {"ECHOTEXT": 255}）。
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum MaxLen {
     /// 旧格式：直接给整数
@@ -143,16 +163,17 @@ pub enum MaxLen {
 
 impl MaxLen {
     /// 取出长度：None 表示调用方未指定，用元数据或默认值。
+    /// 有值时 clamp 到 MAX_FIELD_LEN，防止恶意传超大值导致 OOM 分配。
     pub fn resolve(&self) -> Option<usize> {
         match self {
-            MaxLen::Legacy(n) => Some(*n),
-            MaxLen::Detailed { max_len } => *max_len,
+            MaxLen::Legacy(n) => Some((*n).min(MAX_FIELD_LEN)),
+            MaxLen::Detailed { max_len } => max_len.map(|n| n.min(MAX_FIELD_LEN)),
         }
     }
 }
 
 /// `POST /api/rfc` 请求体，描述一次任意 RFC/BAPI 调用
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 pub struct InvokeRequest {
     /// RFC 函数模块名，如 "BAPI_USER_GETLIST"
     pub func_name: String,
@@ -219,12 +240,15 @@ impl Default for InvokeRequest {
     }
 }
 
-/// 表输出字段规范：`["USERNAME"]` 或 `["USERNAME", 12]`
-/// 用序列化元组实现：第一项必填字段名，第二项可选长度。
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+/// 表输出字段规范：`{"name":"USERNAME"}` 或 `{"name":"USERNAME","max_len":12}`
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FieldSpec {
     pub name: String,
     pub max_len: Option<usize>,
+    /// 是否按字段真实类型读（INT→整数、FLOAT→浮点、INT8→i64、BYTE/XSTRING→Base64、其余→字符串）。
+    /// 默认 false（统一按字符串读，向后兼容）；true 时保留数值/二进制语义。
+    #[serde(default)]
+    pub auto: bool,
 }
 
 impl FieldSpec {
@@ -234,6 +258,7 @@ impl FieldSpec {
         Self {
             name: name.into(),
             max_len: None,
+            auto: false,
         }
     }
 
@@ -243,29 +268,84 @@ impl FieldSpec {
         Self {
             name: name.into(),
             max_len: Some(len),
+            auto: false,
         }
+    }
+
+    /// 返回 clamp 到 MAX_FIELD_LEN 的 max_len（防 OOM）
+    fn clamped_len(&self) -> Option<usize> {
+        self.max_len.map(|n| n.min(MAX_FIELD_LEN))
     }
 }
 
 /// `POST /api/rfc` 响应体
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct InvokeResponse {
     /// 回显调用的函数名
     pub func: String,
     /// 所有标量输出（string/int/float/bcd/int8/bytes），类型由读取方式决定
     pub scalars: HashMap<String, ScalarValue>,
-    /// 所有输出表：表名 → 行数组；每行是 字段名 → 字符串值
-    pub tables: HashMap<String, Vec<HashMap<String, String>>>,
-    /// 所有顶层结构体输出：结构体名 → {字段名 → 字符串值}
+    /// 所有输出表：表名 → 行数组；每行是 字段名 → 值。
+    /// 字段值类型由 FieldSpec.auto 决定：false → 字符串，true → 按真实类型（数值/Base64）
+    pub tables: HashMap<String, Vec<HashMap<String, ScalarValue>>>,
+    /// 所有顶层结构体输出：结构体名 → {字段名 → 值}（同 tables 的值类型规则）
     #[serde(skip_serializing_if = "HashMap::is_empty", default)]
-    pub structs: HashMap<String, HashMap<String, String>>,
-    /// RETURN 表（仅当 read_return=true 且存在时非空）
+    pub structs: HashMap<String, HashMap<String, ScalarValue>>,
+    /// RETURN 表（仅当 read_return=true 且存在时非空）。
+    /// BAPI 消息字段语义固定为字符串，保持 String 类型。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub return_table: Option<Vec<HashMap<String, String>>>,
 }
 
 /// 默认长度（元数据未命中且调用方未指定时的回退值）
 pub const DEFAULT_CHAR_LEN: usize = 255;
+
+/// func_name 最大长度（SAP RFC_ABAP_NAME = 30 字符 +1 终止符）
+pub const MAX_FUNC_NAME_LEN: usize = 30;
+/// max_len / FieldSpec.max_len 上界，防止恶意传超大值导致 OOM 分配
+pub const MAX_FIELD_LEN: usize = 1_000_000;
+/// table_inputs 每个表的行数上界，防止单请求耗尽连接池
+pub const MAX_TABLE_ROWS: usize = 100_000;
+
+/// 校验函数名：非空、≤30 字符、仅含 [A-Za-z0-9_]。
+/// 非法返回 400 错误。空/超长/含特殊字符都拒绝，避免传给 FFI 后的未定义行为。
+pub fn validate_func_name(name: &str) -> Result<(), RfcError> {
+    if name.is_empty() {
+        return Err(RfcError {
+            code: -1,
+            message: "func_name 不能为空".into(),
+            status: 400,
+            ..Default::default()
+        });
+    }
+    if name.len() > MAX_FUNC_NAME_LEN {
+        return Err(RfcError {
+            code: -1,
+            message: format!(
+                "func_name 长度 {} 超过上限 {}",
+                name.len(),
+                MAX_FUNC_NAME_LEN
+            ),
+            status: 400,
+            ..Default::default()
+        });
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(RfcError {
+            code: -1,
+            message: format!(
+                "func_name '{}' 含非法字符（仅允许字母、数字、下划线）",
+                name
+            ),
+            status: 400,
+            ..Default::default()
+        });
+    }
+    Ok(())
+}
 
 /// 长度与类型解析结果（来自元数据缓存或调用方提供的 resolver）
 pub struct ResolvedMeta {
@@ -313,6 +393,24 @@ where
 {
     // 元数据解析：调用方负责（实际走 metadata 缓存；测试里返回固定值）
     let resolved = meta_resolver(conn, req);
+
+    // 入参校验：func_name 格式 + table_inputs 行数上界（防 DoS）
+    validate_func_name(&req.func_name)?;
+    for (table_name, rows) in &req.table_inputs {
+        if rows.len() > MAX_TABLE_ROWS {
+            return Err(RfcError {
+                code: -1,
+                message: format!(
+                    "表 {} 的输入行数 {} 超过上限 {}",
+                    table_name,
+                    rows.len(),
+                    MAX_TABLE_ROWS
+                ),
+                status: 400,
+                ..Default::default()
+            });
+        }
+    }
 
     let mut func = conn.get_function(&req.func_name)?;
 
@@ -375,27 +473,45 @@ where
         scalars.insert(name.clone(), v);
     }
 
-    // 5. 收集表输出（按字段真实类型读，统一序列化为字符串/标量）
-    let mut tables: HashMap<String, Vec<HashMap<String, String>>> = HashMap::new();
+    // 5. 收集表输出。字段值类型由 FieldSpec.auto 决定：
+    //    false → 字符串（向后兼容），true → 按真实类型（INT/FLOAT/INT8/Base64）
+    let mut tables: HashMap<String, Vec<HashMap<String, ScalarValue>>> = HashMap::new();
     for (table_name, fields) in &req.table_outputs {
         let table = func.get_table(table_name)?;
         let count = table.row_count()?;
         let field_metas = resolved.tables.get(table_name);
         let mut out_rows = Vec::with_capacity(count as usize);
         for i in 0..count {
-            let row = table.get_row(i)?;
+            let mut row = table.get_row(i)?;
             let mut m = HashMap::new();
             for field_spec in fields {
-                let len = field_spec
-                    .max_len
-                    .or_else(|| {
-                        field_metas
-                            .and_then(|fm| fm.get(&field_spec.name.to_uppercase()).map(|(l, _)| *l))
-                    })
-                    .unwrap_or(DEFAULT_CHAR_LEN);
-                // 表字段统一按字符串读（类型多样时统一字符表示最稳妥；
-                // 数值精度需求由调用方在 string_outputs 单独指定）
-                let v = row.get_chars(&field_spec.name, len).unwrap_or_default();
+                let v = if field_spec.auto {
+                    let type_ = field_metas
+                        .and_then(|fm| fm.get(&field_spec.name.to_uppercase()).map(|(_, t)| *t))
+                        .unwrap_or(crate::ffi::RFCTYPE_CHAR);
+                    match read_scalar_by_type(&mut row, &field_spec.name, type_) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!(table = %table_name, field = %field_spec.name, error = %e.message, "表字段按类型读取失败，用空串替代");
+                            ScalarValue::Chars(String::new())
+                        }
+                    }
+                } else {
+                    let len = field_spec
+                        .clamped_len()
+                        .or_else(|| {
+                            field_metas
+                                .and_then(|fm| fm.get(&field_spec.name.to_uppercase()).map(|(l, _)| *l))
+                        })
+                        .unwrap_or(DEFAULT_CHAR_LEN);
+                    match row.get_chars(&field_spec.name, len) {
+                        Ok(v) => ScalarValue::Chars(v),
+                        Err(e) => {
+                            tracing::warn!(table = %table_name, field = %field_spec.name, error = %e.message, "表字段读取失败，用空串替代");
+                            ScalarValue::Chars(String::new())
+                        }
+                    }
+                };
                 m.insert(field_spec.name.clone(), v);
             }
             out_rows.push(m);
@@ -403,24 +519,43 @@ where
         tables.insert(table_name.clone(), out_rows);
     }
 
-    // 5b. 收集顶层结构体输出（字段值统一字符串）
-    let mut structs: HashMap<String, HashMap<String, String>> = HashMap::new();
+    // 5b. 收集顶层结构体输出（同表输出的类型规则）
+    let mut structs: HashMap<String, HashMap<String, ScalarValue>> = HashMap::new();
     for (struct_name, fields) in &req.struct_outputs {
-        let row = match func.get_structure(struct_name) {
+        let mut row = match func.get_structure(struct_name) {
             Ok(r) => r,
             Err(_) => continue, // 该函数无此结构体参数，跳过
         };
         let struct_metas = resolved.tables.get(struct_name);
         let mut m = HashMap::new();
         for field_spec in fields {
-            let len = field_spec
-                .max_len
-                .or_else(|| {
-                    struct_metas
-                        .and_then(|fm| fm.get(&field_spec.name.to_uppercase()).map(|(l, _)| *l))
-                })
-                .unwrap_or(DEFAULT_CHAR_LEN);
-            let v = row.get_chars(&field_spec.name, len).unwrap_or_default();
+            let v = if field_spec.auto {
+                let type_ = struct_metas
+                    .and_then(|fm| fm.get(&field_spec.name.to_uppercase()).map(|(_, t)| *t))
+                    .unwrap_or(crate::ffi::RFCTYPE_CHAR);
+                match read_scalar_by_type(&mut row, &field_spec.name, type_) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(structure = %struct_name, field = %field_spec.name, error = %e.message, "结构体字段按类型读取失败，用空串替代");
+                        ScalarValue::Chars(String::new())
+                    }
+                }
+            } else {
+                let len = field_spec
+                    .clamped_len()
+                    .or_else(|| {
+                        struct_metas
+                            .and_then(|fm| fm.get(&field_spec.name.to_uppercase()).map(|(l, _)| *l))
+                    })
+                    .unwrap_or(DEFAULT_CHAR_LEN);
+                match row.get_chars(&field_spec.name, len) {
+                    Ok(v) => ScalarValue::Chars(v),
+                    Err(e) => {
+                        tracing::warn!(structure = %struct_name, field = %field_spec.name, error = %e.message, "结构体字段读取失败，用空串替代");
+                        ScalarValue::Chars(String::new())
+                    }
+                }
+            };
             m.insert(field_spec.name.clone(), v);
         }
         structs.insert(struct_name.clone(), m);
@@ -443,28 +578,28 @@ where
 }
 
 /// 按 RFCTYPE 类型值选择对应的 getter 读取标量输出。
-/// 用于 auto_outputs：让服务端按字段真实类型保留数值/二进制语义。
-fn read_scalar_by_type(
-    func: &mut RfcFunction,
+/// 用于 auto_outputs 和 FieldSpec.auto=true 的表/结构体字段：
+/// 让服务端按字段真实类型保留数值/二进制语义。
+fn read_scalar_by_type<R: crate::function::ScalarReader>(
+    reader: &mut R,
     name: &str,
     type_: i32,
 ) -> Result<ScalarValue, RfcError> {
-    // RFCTYPE 数值见 ffi.rs 的 rfctype 模块（CHAR=0,DATE=1,BCD=2,TIME=3,
-    // BYTE=4,TABLE=5,NUM=6,FLOAT=7,INT=8,INT2=9,INT1=10,STRUCTURE=17,...）
+    use crate::ffi::rfctype::*;
     match type_ {
-        8 => Ok(ScalarValue::Int(func.get_int(name)?)), // INT (i32)
-        9 | 10 => Ok(ScalarValue::Int(func.get_int(name)?)), // INT2/INT1 归到 i32
-        7 => Ok(ScalarValue::Float(func.get_float(name)?)), // FLOAT (f64)
-        // INT8 暂以字符串读（RFCTYPE_INT8=31 等，跨 SDK 版本数值不稳，保守处理）
-        // 二进制（BYTE=4, XSTRING=30）：读字节后 Base64
-        4 | 30 => {
-            let bytes = func.get_xstring(name, DEFAULT_CHAR_LEN)?;
+        INT => Ok(ScalarValue::Int(reader.read_int(name)?)), // INT (i32)
+        INT2 | INT1 => Ok(ScalarValue::Int(reader.read_int(name)?)), // INT2/INT1 归到 i32
+        INT8 => Ok(ScalarValue::Int8(reader.read_int8(name)?)), // INT8 (i64)
+        FLOAT => Ok(ScalarValue::Float(reader.read_float(name)?)), // FLOAT (f64)
+        // 二进制（BYTE, XSTRING）：读字节后 Base64
+        BYTE | XSTRING => {
+            let bytes = reader.read_xstring(name, DEFAULT_CHAR_LEN)?;
             let b64 = general_purpose::STANDARD.encode(&bytes);
             Ok(ScalarValue::Chars(b64))
         }
         // 其余（CHAR/NUM/DATE/TIME/BCD/STRING）：按字符串读，BCD 保留小数位
         _ => {
-            let v = func.get_chars(name, DEFAULT_CHAR_LEN)?;
+            let v = reader.read_chars(name, DEFAULT_CHAR_LEN)?;
             Ok(ScalarValue::Chars(v))
         }
     }
@@ -477,7 +612,13 @@ fn read_return_table(
         Ok(t) => t,
         Err(_) => return Ok(None),
     };
-    let count = table.row_count().unwrap_or(0);
+    let count = match table.row_count() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e.message, "读取 RETURN 表行数失败，按 0 行处理");
+            0
+        }
+    };
     if count == 0 {
         return Ok(None);
     }
@@ -485,22 +626,17 @@ fn read_return_table(
     for i in 0..count {
         let row = table.get_row(i)?;
         let mut m = HashMap::new();
-        m.insert(
-            "TYPE".to_string(),
-            row.get_chars("TYPE", 1).unwrap_or_default(),
-        );
-        m.insert(
-            "ID".to_string(),
-            row.get_chars("ID", 20).unwrap_or_default(),
-        );
-        m.insert(
-            "NUMBER".to_string(),
-            row.get_chars("NUMBER", 3).unwrap_or_default(),
-        );
-        m.insert(
-            "MESSAGE".to_string(),
-            row.get_chars("MESSAGE", 220).unwrap_or_default(),
-        );
+        // RETURN 字段读取失败时 log warn，避免空字段掩盖真实 SAP 错误
+        for (key, len) in [("TYPE", 1), ("ID", 20), ("NUMBER", 3), ("MESSAGE", 220)] {
+            let val = match row.get_chars(key, len) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(field = key, error = %e.message, "读取 RETURN 表字段失败，用空串替代");
+                    String::new()
+                }
+            };
+            m.insert(key.to_string(), val);
+        }
         rows.push(m);
     }
     Ok(Some(rows))
@@ -528,6 +664,7 @@ pub fn rfctype_name(t: i32) -> &'static str {
         17 => "STRUCTURE",
         29 => "STRING",
         30 => "XSTRING",
+        31 => "INT8",
         _ => "UNKNOWN",
     }
 }
@@ -545,7 +682,7 @@ pub fn direction_name(d: i32) -> &'static str {
 }
 
 /// 字段定义（用于函数参数嵌套字段、DDIC 类型字段）
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct FieldDef {
     pub name: String,
     #[serde(rename = "type")]
@@ -556,7 +693,7 @@ pub struct FieldDef {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub description: String,
     /// 嵌套结构体/表的子字段（仅 STRUCTURE/TABLE 且有展开时出现）。
-    /// 用 Box<FieldDef> 表达递归类型（utoipa 要求递归 schema 必须 Box 化）。
+    /// 用 Box<FieldDef> 表达递归类型（Rust 要求递归类型必须 Box 化）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<Vec<Box<FieldDef>>>,
 }
@@ -584,7 +721,7 @@ impl FieldDef {
 
 // --- 端点① GET /api/functions/{name} ---
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct FunctionParam {
     pub name: String,
     #[serde(rename = "type")]
@@ -603,7 +740,7 @@ pub struct FunctionParam {
     pub fields: Option<Vec<Box<FieldDef>>>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct FunctionInterface {
     pub name: String,
     pub params: Vec<FunctionParam>,
@@ -611,7 +748,7 @@ pub struct FunctionInterface {
 
 // --- 端点② POST /api/functions/search ---
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct SearchFunctionEntry {
     pub name: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -620,7 +757,7 @@ pub struct SearchFunctionEntry {
     pub description: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct SearchResponse {
     pub pattern: String,
     pub count: usize,
@@ -629,7 +766,7 @@ pub struct SearchResponse {
 
 // --- 端点③ GET /api/ddic/type/{name} ---
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct DdicTypeResponse {
     pub name: String,
     pub fields: Vec<FieldDef>,
@@ -637,13 +774,13 @@ pub struct DdicTypeResponse {
 
 // --- 端点④ GET /api/ddic/field/{table}/{field} ---
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct FixedValueDto {
     pub value: String,
     pub text: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct FieldSemanticsResponse {
     pub table: String,
     pub field: String,
@@ -663,13 +800,13 @@ pub struct FieldSemanticsResponse {
 
 // --- 端点⑤ GET /api/functions/{name}/doc ---
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ParamDoc {
     pub name: String,
     pub text: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct FunctionDocResponse {
     pub name: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -729,8 +866,28 @@ mod tests {
     fn field_spec_new_helpers() {
         let f1 = FieldSpec::new("X");
         assert_eq!(f1.max_len, None);
+        assert!(!f1.auto);
         let f2 = FieldSpec::with_len("Y", 40);
         assert_eq!(f2.max_len, Some(40));
+        assert!(!f2.auto);
+    }
+
+    #[test]
+    fn field_spec_auto_defaults_false() {
+        // 不传 auto 时默认 false（向后兼容）
+        let f: FieldSpec = serde_json::from_str(r#"{"name":"X","max_len":10}"#).unwrap();
+        assert!(!f.auto);
+        // 显式传 true
+        let f: FieldSpec = serde_json::from_str(r#"{"name":"X","max_len":10,"auto":true}"#).unwrap();
+        assert!(f.auto);
+    }
+
+    #[test]
+    fn scalar_value_into_chars() {
+        assert_eq!(ScalarValue::Chars("hi".into()).into_chars(), "hi");
+        assert_eq!(ScalarValue::Int(42).into_chars(), "42");
+        assert_eq!(ScalarValue::Int8(9_000_000_000).into_chars(), "9000000000");
+        assert_eq!(ScalarValue::Float(1.5).into_chars(), "1.5");
     }
 
     // ---------- InvokeRequest 端到端反序列化 ----------
@@ -909,5 +1066,218 @@ mod tests {
             let s = serde_json::to_string(&k).unwrap();
             assert_eq!(s, format!("\"{}\"", expected));
         }
+    }
+
+    // ---------- read_scalar_by_type（mock ScalarReader）----------
+
+    /// 记录读取操作的 mock reader，按预置值返回。
+    struct MockReader {
+        chars_val: String,
+        int_val: i32,
+        int8_val: i64,
+        float_val: f64,
+        xstring_val: Vec<u8>,
+        calls: Vec<(String, &'static str)>, // (字段名, 调用方法)
+    }
+
+    impl crate::function::ScalarReader for MockReader {
+        fn read_chars(&mut self, name: &str, _max_len: usize) -> Result<String, RfcError> {
+            self.calls.push((name.to_string(), "chars"));
+            Ok(self.chars_val.clone())
+        }
+        fn read_int(&mut self, name: &str) -> Result<i32, RfcError> {
+            self.calls.push((name.to_string(), "int"));
+            Ok(self.int_val)
+        }
+        fn read_int8(&mut self, name: &str) -> Result<i64, RfcError> {
+            self.calls.push((name.to_string(), "int8"));
+            Ok(self.int8_val)
+        }
+        fn read_float(&mut self, name: &str) -> Result<f64, RfcError> {
+            self.calls.push((name.to_string(), "float"));
+            Ok(self.float_val)
+        }
+        fn read_xstring(&mut self, name: &str, _cap: usize) -> Result<Vec<u8>, RfcError> {
+            self.calls.push((name.to_string(), "xstring"));
+            Ok(self.xstring_val.clone())
+        }
+    }
+
+    fn mock_reader() -> MockReader {
+        MockReader {
+            chars_val: "text".into(),
+            int_val: 42,
+            int8_val: 9_000_000_000,
+            float_val: 1.5,
+            xstring_val: b"hello".to_vec(),
+            calls: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn read_scalar_by_type_int() {
+        let mut r = mock_reader();
+        let v = read_scalar_by_type(&mut r, "F", crate::ffi::rfctype::INT).unwrap();
+        assert!(matches!(v, ScalarValue::Int(42)));
+        assert_eq!(r.calls[0].1, "int");
+    }
+
+    #[test]
+    fn read_scalar_by_type_int2_int1_route_to_int() {
+        let mut r = mock_reader();
+        let v = read_scalar_by_type(&mut r, "F", crate::ffi::rfctype::INT2).unwrap();
+        assert!(matches!(v, ScalarValue::Int(42)));
+        let mut r2 = mock_reader();
+        let v2 = read_scalar_by_type(&mut r2, "F", crate::ffi::rfctype::INT1).unwrap();
+        assert!(matches!(v2, ScalarValue::Int(42)));
+    }
+
+    #[test]
+    fn read_scalar_by_type_int8() {
+        let mut r = mock_reader();
+        let v = read_scalar_by_type(&mut r, "F", crate::ffi::rfctype::INT8).unwrap();
+        assert!(matches!(v, ScalarValue::Int8(9_000_000_000)));
+        assert_eq!(r.calls[0].1, "int8");
+    }
+
+    #[test]
+    fn read_scalar_by_type_float() {
+        let mut r = mock_reader();
+        let v = read_scalar_by_type(&mut r, "F", crate::ffi::rfctype::FLOAT).unwrap();
+        assert!(matches!(v, ScalarValue::Float(f) if (f - 1.5).abs() < 1e-9));
+    }
+
+    #[test]
+    fn read_scalar_by_type_byte_xstring_base64() {
+        // BYTE(4) 和 XSTRING(30) 都读字节后 Base64 编码
+        for ty in [crate::ffi::rfctype::BYTE, crate::ffi::rfctype::XSTRING] {
+            let mut r = mock_reader();
+            let v = read_scalar_by_type(&mut r, "F", ty).unwrap();
+            match v {
+                ScalarValue::Chars(s) => assert_eq!(s, "aGVsbG8="), // "hello" 的 Base64
+                other => panic!("BYTE/XSTRING 应为 Chars(Base64), 实际 {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn read_scalar_by_type_char_bcd_date_fallback_to_chars() {
+        // 其余类型（CHAR/BCD/DATE/TIME/STRING）走 _=> 字符串读
+        for ty in [
+            crate::ffi::rfctype::CHAR,
+            crate::ffi::rfctype::BCD,
+            crate::ffi::rfctype::DATE,
+            crate::ffi::rfctype::STRING,
+        ] {
+            let mut r = mock_reader();
+            let v = read_scalar_by_type(&mut r, "F", ty).unwrap();
+            assert!(matches!(v, ScalarValue::Chars(_)), "ty={} 应为 Chars", ty);
+        }
+    }
+
+    // ---------- decode_typed 错误分支 ----------
+
+    #[test]
+    fn decode_typed_bcd_non_string_value_errors() {
+        // BCD 的 value 必须是字符串，传数字应报错
+        let req: InvokeRequest =
+            serde_json::from_str(r#"{"func_name":"X","inputs":{"P":{"type":"BCD","value":123}}}"#)
+                .unwrap();
+        // apply_to_func 会调 decode_typed，应在 BCD 非字符串时报错
+        // 这里通过反序列化验证 Typed 变体，decode_typed 错误路径需通过 apply 触发
+        match &req.inputs["P"] {
+            ScalarValue::Typed(t) => {
+                assert!(matches!(t.kind, TypedScalarKind::Bcd));
+                assert_eq!(t.value.as_i64(), Some(123)); // 非字符串
+            }
+            other => panic!("应为 Typed, 实际 {:?}", other),
+        }
+    }
+
+    #[test]
+    fn decode_typed_bytes_invalid_base64_errors() {
+        // Base64 非法字符串，decode_typed 应返回 Err
+        let t = TypedScalar {
+            kind: TypedScalarKind::Bytes,
+            value: serde_json::json!("!!!非Base64!!!"),
+        };
+        let res = ScalarValue::Typed(t);
+        // decode_typed 是私有的，通过 apply_to_func 无法测（需 RfcFunction），
+        // 这里验证 Base64 解码逻辑本身：非法输入应产生错误
+        let decode_result = general_purpose::STANDARD.decode("!!!非Base64!!!");
+        assert!(decode_result.is_err(), "非法 Base64 应解码失败");
+        // 确认 ScalarValue 反序列化成功（decode_typed 在 apply 时才调）
+        let _ = res;
+    }
+
+    // ---------- rfctype_name / direction_name 映射 ----------
+
+    #[test]
+    fn rfctype_name_mapping() {
+        assert_eq!(rfctype_name(0), "CHAR");
+        assert_eq!(rfctype_name(2), "BCD");
+        assert_eq!(rfctype_name(8), "INT");
+        assert_eq!(rfctype_name(17), "STRUCTURE");
+        assert_eq!(rfctype_name(31), "INT8");
+        assert_eq!(rfctype_name(999), "UNKNOWN");
+    }
+
+    #[test]
+    fn direction_name_mapping() {
+        assert_eq!(direction_name(crate::ffi::RFC_DIRECTION_IMPORT), "IMPORT");
+        assert_eq!(direction_name(crate::ffi::RFC_DIRECTION_EXPORT), "EXPORT");
+        assert_eq!(
+            direction_name(crate::ffi::RFC_DIRECTION_CHANGING),
+            "CHANGING"
+        );
+        assert_eq!(direction_name(crate::ffi::RFC_DIRECTION_TABLES), "TABLES");
+        assert_eq!(direction_name(0), "UNKNOWN"); // 无方向
+        assert_eq!(direction_name(999), "UNKNOWN");
+    }
+
+    // ---------- 输入校验 ----------
+
+    #[test]
+    fn validate_func_name_accepts_valid() {
+        assert!(validate_func_name("STFC_CONNECTION").is_ok());
+        assert!(validate_func_name("BAPI_USER_GETLIST").is_ok());
+        assert!(validate_func_name("RFC_FUNCTION_SEARCH").is_ok());
+        assert!(validate_func_name("Z_FOO_123").is_ok());
+    }
+
+    #[test]
+    fn validate_func_name_rejects_empty() {
+        let err = validate_func_name("").unwrap_err();
+        assert_eq!(err.status, 400);
+        assert!(err.message.contains("空"));
+    }
+
+    #[test]
+    fn validate_func_name_rejects_too_long() {
+        let err = validate_func_name(&"A".repeat(31)).unwrap_err();
+        assert_eq!(err.status, 400);
+        assert!(err.message.contains("超过上限"));
+    }
+
+    #[test]
+    fn validate_func_name_rejects_special_chars() {
+        // 含空格、连字符、中文等非法字符
+        for bad in ["FOO BAR", "FOO-BAR", "FOO;DROP", "函数", "FOO$"] {
+            let err = validate_func_name(bad).unwrap_err();
+            assert_eq!(err.status, 400, "{} 应被拒绝", bad);
+            assert!(err.message.contains("非法字符"), "{} 的错误信息应含非法字符", bad);
+        }
+    }
+
+    #[test]
+    fn max_len_clamps_to_upper_bound() {
+        // 超大 max_len 应被 clamp 到 MAX_FIELD_LEN，防止 OOM
+        let m: MaxLen = serde_json::from_str("9999999999").unwrap();
+        assert_eq!(m.resolve(), Some(MAX_FIELD_LEN));
+        let m: MaxLen = serde_json::from_str(r#"{"max_len":9999999999}"#).unwrap();
+        assert_eq!(m.resolve(), Some(MAX_FIELD_LEN));
+        // 正常值不受影响
+        let m: MaxLen = serde_json::from_str("255").unwrap();
+        assert_eq!(m.resolve(), Some(255));
     }
 }

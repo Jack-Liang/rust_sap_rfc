@@ -152,9 +152,9 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 |---|---|
 | 连接 | ✅ 直连（ASHOST），自动重连，优雅停机 |
 | 标量输入 | ✅ string/int/float 自动按 JSON 类型派发；BCD/INT8/二进制用显式 `{"type":"...","value":...}` |
-| 标量输出 | ✅ `int_outputs`（按 INT 读）/ `string_outputs`（按字符串读，长度可自动发现） |
-| 表参数（TABLES） | ✅ 输入多行 + 输出遍历（**输出字段统一按字符串读**，无类型保留） |
-| 顶层结构体参数 | ✅ `struct_inputs` / `struct_outputs`（如 BAPI_USER_CREATE.ADDRESS），输出同样统一按字符串读 |
+| 标量输出 | ✅ `int_outputs`（按 INT 读）/ `string_outputs`（按字符串读，长度可自动发现）/ `auto_outputs`（按元数据真实类型读，保留 INT/FLOAT/INT8/二进制语义） |
+| 表参数（TABLES） | ✅ 输入多行 + 输出遍历；字段加 `"auto":true` 后按真实类型读（INT/FLOAT/INT8/Base64），否则按字符串 |
+| 顶层结构体参数 | ✅ `struct_inputs` / `struct_outputs`（如 BAPI_USER_CREATE.ADDRESS），输出字段同样支持 `auto` 按真实类型读 |
 | BCD/INT8/二进制 输入 | ✅ `{"type":"BCD",...}` / `{"type":"INT8",...}` / `{"type":"BYTES",...}`（BYTES 用 Base64） |
 | 元数据自动发现 | ✅ 字段长度缓存，无需手填 max_len（标量/表/结构体输出均生效） |
 | Server 端（被 SAP 回调）| ✅ 配置驱动 webhook 转发（`SAP_ROLE=server`），详见 [§9](#9-server-端模式被-sap-调用) |
@@ -165,10 +165,10 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 
 | 项 | 说明 |
 |---|---|
-| 并发 | 多连接池（默认 8，`SAP_POOL_SIZE` 可配），不同请求可并行执行 SAP 调用 |
+| 并发 | 多连接池（默认 8，`SAP_POOL_SIZE` 可配），不同请求可并行执行 SAP 调用；池耗尽时 acquire 等待上限 120s |
 | 字符集 | 通过 UTF-16 桥接 SAP UC，UTF-8 输入输出 |
 | 平台 | Windows/Linux/macOS × x86_64/aarch64（`build.rs` 自动选 SDK 子目录） |
-| RFC 调用超时 | 当前无超时，慢请求可能长时间占用连接 |
+| RFC 调用超时 | 连接池层有 acquire 超时（120s）；单次 RFC 调用暂无执行超时 |
 
 ---
 
@@ -220,8 +220,9 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 | `struct_inputs` | object | ❌ | 顶层结构体输入：结构体名 → {字段名 → 值}（如 `ADDRESS`） |
 | `int_outputs` | string[] | ❌ | 要读取的整型输出参数名列表（按 SAP `INT` 读） |
 | `string_outputs` | object | ❌ | 要读取的字符串输出参数：参数名 → 最大长度。`max_len` 留 `null` 时由服务端从元数据自动发现 |
-| `table_outputs` | object | ❌ | 要读取的输出表：表名 → 字段对象数组 `{"name":"...","max_len":...}` |
-| `struct_outputs` | object | ❌ | 要读取的顶层结构体输出：结构体名 → 字段对象数组 |
+| `auto_outputs` | string[] | ❌ | 要按元数据真实类型读的标量输出参数名（INT→整数、FLOAT→浮点、INT8→i64、BCD→字符串、BYTE/XSTRING→Base64） |
+| `table_outputs` | object | ❌ | 要读取的输出表：表名 → 字段对象数组 `{"name":"...","max_len":...,"auto":...}`（`auto:true` 时按真实类型读，默认 false） |
+| `struct_outputs` | object | ❌ | 要读取的顶层结构体输出：结构体名 → 字段对象数组（同 `table_outputs` 的字段规则） |
 | `read_return` | bool | ❌ | 是否自动读取 BAPI 通用 `RETURN` 消息表，默认 `false` |
 
 **值类型规则**（`inputs` / `table_inputs` / `struct_inputs` 的字段值）：
@@ -239,24 +240,26 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 {
   "func": "BAPI_USER_GETLIST",                // 回显函数名
   "scalars": {                                 // 标量输出
-    "ROWS": 50,                                //   int_outputs → JSON 整数
-    "ECHOTEXT": "Hello"                        //   string_outputs → JSON 字符串
+    "ROWS": 50,                                //   int_outputs / auto_outputs → JSON 整数
+    "ECHOTEXT": "Hello",                       //   string_outputs → JSON 字符串
+    "BIG_ID": 9876543210                       //   auto_outputs（INT8）→ JSON 整数
   },
-  "tables": {                                  // 表输出：表名 → 行数组（字段统一字符串）
+  "tables": {                                  // 表输出：表名 → 行数组
     "USERLIST": [
-      { "USERNAME": "DEVELOPER", "FIRSTNAME": "Dev", "LASTNAME": "User" }
+      // auto:false（默认）→ 字段值为字符串；auto:true → 按真实类型（整数/浮点/Base64）
+      { "USERNAME": "DEVELOPER", "ROWCOUNT": 42 }
     ]
   },
-  "structs": {                                 // 顶层结构体输出（struct_outputs 声明时出现）
+  "structs": {                                 // 顶层结构体输出（struct_outputs 声明时出现，类型规则同 tables）
     "ADDRESS": { "FIRSTNAME": "Dev", "LASTNAME": "User" }
   },
-  "return_table": [                            // 仅当 read_return=true 且存在 RETURN 表时
+  "return_table": [                            // 仅当 read_return=true 且存在 RETURN 表时（字段统一字符串）
     { "TYPE": "S", "ID": "01", "NUMBER": "123", "MESSAGE": "..." }
   ]
 }
 ```
 
-> ⚠️ **当前版本的限制**：`table_outputs` 与 `struct_outputs` 的字段值统一按字符串读取，即使 SAP 侧类型是 INT/FLOAT/BCD/二进制。需要在调用方保留数值/二进制精度时，可改用 `BAPI_TRANSACTION_COMMIT` 等带结构化输入/输出的 BAPI，或自行用 SAP GUI/SE37 二次处理。
+> 💡 **表/结构体输出的类型控制**：字段默认按字符串读（向后兼容）。给字段加 `"auto":true` 后，服务端按 DDIC 真实类型选择 getter（INT→整数、FLOAT→浮点、INT8→i64、BYTE/XSTRING→Base64、其余→字符串），保留数值/二进制语义。
 
 未读取的字段（如没传 `table_outputs`）在响应中对应键**不出现**（`tables` 为空对象）。
 
@@ -279,7 +282,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 # 1. 搜函数 → 2. 查接口(发现 EXPORT 表 USERLIST) → 3. 调用
 curl http://127.0.0.1:3000/api/functions/BAPI_USER_GETLIST
 curl -X POST http://127.0.0.1:3000/api/rfc -H "Content-Type: application/json" \
-  -d '{"func_name":"BAPI_USER_GETLIST","table_outputs":{"USERLIST":[["USERNAME",12]]},"read_return":true}'
+  -d '{"func_name":"BAPI_USER_GETLIST","table_outputs":{"USERLIST":[{"name":"USERNAME","max_len":12}]},"read_return":true}'
 ```
 
 > **约束**
@@ -426,35 +429,44 @@ console.log(await r.json());
 
 ### 6.1 HTTP 状态码
 
-| 状态码 | 触发场景 |
-|---|---|
-| `200 OK` | 调用成功 |
-| `400 Bad Request` | 请求体 JSON 不合法或字段类型不符（由 axum 自动返回） |
-| `500 Internal Server Error` | SAP 调用失败（连接断、参数名错、ABAP 抛异常等） |
+服务端按 SAP 错误码（`RFC_RC`）映射 HTTP 状态码，让调用方能按状态码区分「调用方错误」(4xx) 与「上游错误」(5xx)：
+
+| 状态码 | 触发场景 | 对应 SAP RC |
+|---|---|---|
+| `200 OK` | 调用成功 | `RFC_OK` (0) |
+| `400 Bad Request` | 请求 JSON 不合法（axum 自动）；ABAP 消息/异常；参数无效/转换失败 | `RFC_ABAP_MESSAGE` (4), `RFC_ABAP_EXCEPTION` (5), `RFC_INVALID_PARAMETER` (20), `RFC_CONVERSION_FAILURE` (23) |
+| `403 Forbidden` | SAP 授权检查失败 | `RFC_AUTHORIZATION_FAILURE` (25) |
+| `404 Not Found` | 函数模块/结构定义不存在 | `RFC_NOT_FOUND` (17) |
+| `500 Internal Server Error` | ABAP 运行时失败、内存不足、未知错误 | `RFC_ABAP_RUNTIME_FAILURE` (3), `RFC_MEMORY_INSUFFICIENT` (11) 等 |
+| `502 Bad Gateway` | 通信失败、连接被对端关闭 | `RFC_COMMUNICATION_FAILURE` (1), `RFC_CLOSED` (6) |
+| `504 Gateway Timeout` | SAP 侧超时 | `RFC_TIMEOUT` (9) |
 
 ### 6.2 错误响应体
 
 ```json
 {
   "error": {
-    "code": 7,
-    "key": "RFC_ABAP_MESSAGE",
-    "message": "User DEVELOPER has no authorization..."
+    "code": 5,
+    "key": "RFC_ABAP_EXCEPTION",
+    "message": "Function module BAPI_FOO_BAR does not exist..."
   }
 }
 ```
 
 | 字段 | 含义 |
 |---|---|
-| `code` | SAP NWRFC 返回码（数字）。常见：`1`=通信错误，`2`=系统失败，`5`=授权，`7`=ABAP 消息，`10`=内部错误 |
+| `code` | SAP NWRFC 返回码（数字）。常见：`1`=通信失败，`3`=ABAP 运行时失败，`5`=ABAP 异常，`17`=未找到，`23`=类型转换失败，`25`=授权失败 |
 | `key` | SDK 错误 key 字符串，便于精确分类 |
 | `message` | 人类可读错误描述 |
 
-### 6.3 500 错误排查思路
+> 💡 HTTP 状态码已按 `code` 派生（见上表），调用方既可按状态码做粗粒度处理，也可用 `code` 做精细分支。
 
-1. **看 `key`**：`RFC_COMMUNICATION_FAILURE` 多半是网络/连接；`RFC_ABAP_EXCEPTION` 是 ABAP 抛错
-2. **看 `code` 对照 SDK 头文件 `sapnwrfc.h` 中的 `RFC_RC` 枚举**
-3. **本地复现**：把同一个请求体直接对 SAP 系统用 SE37 跑一遍，验证参数名/类型
+### 6.3 错误排查思路
+
+1. **看 HTTP 状态码**：4xx 多半是请求参数/ABAP 业务问题（改请求可恢复）；5xx 是 SAP 系统/网络问题
+2. **看 `key`**：`RFC_COMMUNICATION_FAILURE` 多半是网络/连接；`RFC_ABAP_EXCEPTION` 是 ABAP 抛错
+3. **看 `code` 对照 SDK 头文件 `sapnwrfc.h` 中的 `RFC_RC` 枚举**
+4. **本地复现**：把同一个请求体直接对 SAP 系统用 SE37 跑一遍，验证参数名/类型
 
 ---
 
@@ -529,13 +541,14 @@ src/
 - **为什么需要 `unsafe impl Send`**：`RfcConnection` 持裸指针非 Send；在 `Mutex` 串行化保护下，NWRFC SDK 允许跨线程串行使用同一连接，故 sound
 - **池大小**：默认 `SAP_POOL_SIZE=8`，可在 `.env` 调整。请求从池里抢空闲连接，未抢到则等待；连接失败时按需自动重连
 
-### 8.3 升级路径（规划中，提示扩展点）
+### 8.3 升级路径
 
 | 需求 | 状态 / 改造方向 |
 |---|---|
 | 鉴权 | axum 加 `tower-http` 中间件 + API Key 校验 |
-| RFC 调用超时 | `tokio::time::timeout` 包 `spawn_blocking`，慢请求不挂死服务 |
-| 数值/二进制类型输出表字段 | 当前表/结构体输出统一按 string 读；后续在 `table_outputs` 字段定义加类型标记，executor 按真实类型读（`get_int` / `get_float` / `get_xstring` 等已实现） |
+| 连接池 acquire 超时 | ✅ 已实现（`ACQUIRE_TIMEOUT=120s`，池耗尽时调用方不再永久挂起） |
+| 表/结构体输出按真实类型读 | ✅ 已实现（`FieldSpec.auto=true` 时按 INT/FLOAT/INT8/Base64 读） |
+| 单次 RFC 执行超时 | `tokio::time::timeout` 包 `spawn_blocking`，慢请求不挂死服务 |
 | tRFC/qRFC | 暂不支持 |
 
 ---

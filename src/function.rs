@@ -1,11 +1,10 @@
 //! RFC 函数/表/结构体的参数读写封装。
 //!
-//! 注：部分 getter（RfcRow 的 get_float/get_int8/get_xstring，以及 read_int8）
-//! 当前主流程未直接调用（表输出统一按字符串读），但作为公共 API 保留，
-//! 供未来按类型读取表字段或外部库直接使用。
+//! 注：部分 getter（RfcRow 的 get_float/get_xstring）当前主流程未直接调用
+//! （表输出统一按字符串读），但作为公共 API 保留，供未来按类型读取表字段或
+//! 外部库直接使用。
 
 #![allow(dead_code)]
-
 use crate::error::{check_rc, RfcError};
 use crate::ffi::*;
 use crate::string_utils::{sap_uc_to_string, str_to_sap_uc};
@@ -66,15 +65,6 @@ pub(crate) unsafe fn read_float(
     let mut error_info = std::mem::zeroed::<RFC_ERROR_INFO>();
     let mut value: f64 = 0.0;
     let rc = RfcGetFloat(data_handle, name_uc, &mut value, &mut error_info);
-    check_rc(rc, &error_info)?;
-    Ok(value)
-}
-
-/// 读取 8 字节整数字段（RFC_INT8）。
-unsafe fn read_int8(data_handle: *mut c_void, name_uc: *const SAP_UC) -> Result<i64, RfcError> {
-    let mut error_info = std::mem::zeroed::<RFC_ERROR_INFO>();
-    let mut value: i64 = 0;
-    let rc = RfcGetInt8(data_handle, name_uc, &mut value, &mut error_info);
     check_rc(rc, &error_info)?;
     Ok(value)
 }
@@ -224,11 +214,15 @@ impl RfcFunction {
         }
     }
 
-    /// 读取 8 字节整数参数
+    /// 读取 8 字节整数参数（RFC_INT8）
     pub fn get_int8(&mut self, param_name: &str) -> Result<i64, RfcError> {
         unsafe {
+            let mut error_info = std::mem::zeroed::<RFC_ERROR_INFO>();
             let name_uc = str_to_sap_uc(param_name);
-            read_int8(self.handle, name_uc.as_ptr())
+            let mut value: i64 = 0;
+            let rc = RfcGetInt8(self.handle, name_uc.as_ptr(), &mut value, &mut error_info);
+            check_rc(rc, &error_info)?;
+            Ok(value)
         }
     }
 
@@ -318,6 +312,13 @@ impl RfcTable {
             let mut error_info = std::mem::zeroed::<RFC_ERROR_INFO>();
             let row = RfcAppendNewRow(self.handle, &mut error_info);
             check_rc(error_info.code, &error_info)?;
+            if row.is_null() {
+                return Err(RfcError {
+                    code: error_info.code,
+                    message: "RfcAppendNewRow 返回 null 句柄".into(),
+                    ..Default::default()
+                });
+            }
             Ok(RfcRow { handle: row })
         }
     }
@@ -330,6 +331,13 @@ impl RfcTable {
             check_rc(rc, &error_info)?;
             let row = RfcGetCurrentRow(self.handle, &mut error_info);
             check_rc(error_info.code, &error_info)?;
+            if row.is_null() {
+                return Err(RfcError {
+                    code: error_info.code,
+                    message: format!("RfcGetCurrentRow 返回 null 句柄 (index: {})", index),
+                    ..Default::default()
+                });
+            }
             Ok(RfcRow { handle: row })
         }
     }
@@ -372,6 +380,18 @@ impl RfcRow {
         }
     }
 
+    /// 读取当前行的整数字段（INT/INT2/INT1 均归到 i32）
+    pub fn get_int(&self, field_name: &str) -> Result<i32, RfcError> {
+        unsafe {
+            let mut error_info = std::mem::zeroed::<RFC_ERROR_INFO>();
+            let name_uc = str_to_sap_uc(field_name);
+            let mut value: c_int = 0;
+            let rc = RfcGetInt(self.handle, name_uc.as_ptr(), &mut value, &mut error_info);
+            check_rc(rc, &error_info)?;
+            Ok(value)
+        }
+    }
+
     /// 设置当前行的浮点字段
     pub fn set_float(&self, field_name: &str, value: f64) -> Result<(), RfcError> {
         unsafe {
@@ -400,11 +420,15 @@ impl RfcRow {
         }
     }
 
-    /// 读取当前行的 8 字节整数字段
+    /// 读取当前行的 8 字节整数字段（INT8）
     pub fn get_int8(&self, field_name: &str) -> Result<i64, RfcError> {
         unsafe {
+            let mut error_info = std::mem::zeroed::<RFC_ERROR_INFO>();
             let name_uc = str_to_sap_uc(field_name);
-            read_int8(self.handle, name_uc.as_ptr())
+            let mut value: i64 = 0;
+            let rc = RfcGetInt8(self.handle, name_uc.as_ptr(), &mut value, &mut error_info);
+            check_rc(rc, &error_info)?;
+            Ok(value)
         }
     }
 
@@ -444,5 +468,51 @@ impl Drop for RfcFunction {
             let mut error_info = std::mem::zeroed::<RFC_ERROR_INFO>();
             let _ = RfcDestroyFunction(self.handle, &mut error_info);
         }
+    }
+}
+
+/// 标量字段读取抽象：让 `read_scalar_by_type` 能同时用于函数参数和表行字段。
+/// RfcFunction（&mut self）和 RfcRow（&self）的接收者不同，故用 `&mut Self` 统一。
+pub trait ScalarReader {
+    fn read_chars(&mut self, name: &str, max_len: usize) -> Result<String, RfcError>;
+    fn read_int(&mut self, name: &str) -> Result<i32, RfcError>;
+    fn read_int8(&mut self, name: &str) -> Result<i64, RfcError>;
+    fn read_float(&mut self, name: &str) -> Result<f64, RfcError>;
+    fn read_xstring(&mut self, name: &str, cap: usize) -> Result<Vec<u8>, RfcError>;
+}
+
+impl ScalarReader for RfcFunction {
+    fn read_chars(&mut self, name: &str, max_len: usize) -> Result<String, RfcError> {
+        self.get_chars(name, max_len)
+    }
+    fn read_int(&mut self, name: &str) -> Result<i32, RfcError> {
+        self.get_int(name)
+    }
+    fn read_int8(&mut self, name: &str) -> Result<i64, RfcError> {
+        self.get_int8(name)
+    }
+    fn read_float(&mut self, name: &str) -> Result<f64, RfcError> {
+        self.get_float(name)
+    }
+    fn read_xstring(&mut self, name: &str, cap: usize) -> Result<Vec<u8>, RfcError> {
+        self.get_xstring(name, cap)
+    }
+}
+
+impl ScalarReader for RfcRow {
+    fn read_chars(&mut self, name: &str, max_len: usize) -> Result<String, RfcError> {
+        self.get_chars(name, max_len)
+    }
+    fn read_int(&mut self, name: &str) -> Result<i32, RfcError> {
+        self.get_int(name)
+    }
+    fn read_int8(&mut self, name: &str) -> Result<i64, RfcError> {
+        self.get_int8(name)
+    }
+    fn read_float(&mut self, name: &str) -> Result<f64, RfcError> {
+        self.get_float(name)
+    }
+    fn read_xstring(&mut self, name: &str, cap: usize) -> Result<Vec<u8>, RfcError> {
+        self.get_xstring(name, cap)
     }
 }

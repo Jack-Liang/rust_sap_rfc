@@ -108,15 +108,18 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 - `struct_inputs`：顶层 IMPORT 结构体参数 → `{字段: 值}`
 - `string_outputs`：要读的 EXPORT 字符串参数 → 最大长度（`null` 表示自动发现）
 - `int_outputs`：要读的 EXPORT 整型参数名数组
-- `table_outputs`：要遍历的 EXPORT 表 → 字段列表
+- `auto_outputs`：要按元数据真实类型读的 EXPORT 标量参数名（INT→整数、FLOAT→浮点、INT8→i64、BCD→字符串、BYTE/XSTRING→Base64）
+- `table_outputs`：要遍历的 EXPORT 表 → 字段列表。字段项 `{"name":"FIELD"}` 或 `{"name":"FIELD","max_len":12}`；加 `"auto":true` 让该字段按真实类型读（INT→整数、FLOAT→浮点、INT8→i64、BYTE/XSTRING→Base64、其余→字符串）
+- `struct_outputs`：顶层结构体输出 → 字段列表（规则同 `table_outputs`）
 - `read_return`：是否自动读 BAPI 的 RETURN 消息表
 
 响应体：
-- `scalars`：标量输出（参数名 → 值）
-- `tables`：表输出（表名 → 行数组，每行 `{字段: 字符串值}`）
-- `return_table`：RETURN 消息（若有）
+- `scalars`：标量输出（参数名 → 值，值类型由读取方式决定）
+- `tables`：表输出（表名 → 行数组，每行 `{字段: 值}`）。默认字段值为字符串；`auto:true` 的字段按真实类型返回（整数/浮点/Base64 字符串）
+- `structs`：顶层结构体输出（同 `tables` 的值类型规则）
+- `return_table`：RETURN 消息（若有，字段统一为字符串）
 
-> ⚠️ **表/结构输出字段值统一按字符串读**，即使是 INT/FLOAT。需保留数值类型时调用方自行转换。
+> ⚠️ **表/结构输出默认按字符串读**。需要保留数值语义时，给字段加 `"auto":true`，服务端按 DDIC 真实类型（INT/FLOAT/INT8/BYTE）选择对应 getter。
 
 ## 关键约束（避坑）
 
@@ -126,7 +129,8 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 4. **BCD/INT8/二进制**用显式类型标记：`{"type":"BCD","value":"123.45"}`、`{"type":"BYTES","value":"<base64>"}`。
 5. **BAPI 要显式提交事务**：写操作的 BAPI（CREATE/UPDATE/DELETE）成功后需调 `BAPI_TRANSACTION_COMMIT`，否则改动不生效。
 6. **错误看 RETURN**：BAPI 通常不报 HTTP 错，而是返回 `RETURN` 表里带 `TYPE=E`（错误）的行。`read_return: true` 能自动带出。
-7. **透明表查询受限**：端点 4/5 对 DDIC 结构普遍可用，透明表（如 MARA）视系统配置可能 `NOT_FOUND`。
+7. **HTTP 状态码有语义**：4xx（400/403/404）多为调用方问题（参数错/未授权/函数不存在），5xx（500/502/504）多为 SAP 系统或网络问题。详见响应体 `error.code`。
+8. **透明表查询受限**：端点 4/5 对 DDIC 结构普遍可用，透明表（如 MARA）视系统配置可能 `NOT_FOUND`。
 
 ## 典型任务示例
 
@@ -148,7 +152,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
   -H "Content-Type: application/json" \
   -d '{
     "func_name": "BAPI_USER_GETLIST",
-    "table_outputs": {"USERLIST": [["USERNAME", 12], ["FULLNAME", 50]]},
+    "table_outputs": {"USERLIST": [{"name": "USERNAME", "max_len": 12}, {"name": "FULLNAME", "max_len": 50}]},
     "read_return": true
   }'
 ```

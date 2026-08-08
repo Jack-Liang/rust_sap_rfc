@@ -62,9 +62,9 @@ pub fn search_functions(
     let mut out = Vec::new();
     for row in table.into_iter().take(max_results) {
         out.push(FunctionEntry {
-            name: row.get("FUNCNAME").cloned().unwrap_or_default(),
-            group: row.get("GROUPNAME").cloned().unwrap_or_default(),
-            description: row.get("STEXT").cloned().unwrap_or_default(),
+            name: row.get("FUNCNAME").map(|v| v.clone().into_chars()).unwrap_or_default(),
+            group: row.get("GROUPNAME").map(|v| v.clone().into_chars()).unwrap_or_default(),
+            description: row.get("STEXT").map(|v| v.clone().into_chars()).unwrap_or_default(),
         });
     }
     Ok(out)
@@ -77,14 +77,17 @@ fn function_table_spec() -> Vec<FieldSpec> {
         FieldSpec {
             name: "FUNCNAME".to_string(),
             max_len: Some(30),
+            auto: false,
         },
         FieldSpec {
             name: "GROUPNAME".to_string(),
             max_len: Some(18),
+            auto: false,
         },
         FieldSpec {
             name: "STEXT".to_string(),
             max_len: Some(79),
+            auto: false,
         },
     ]
 }
@@ -154,18 +157,18 @@ pub fn read_ddic_field_info(
         .unwrap_or_default()
         .into_iter()
         .map(|row| FixedValue {
-            value: row.get("LOW").cloned().unwrap_or_default(),
-            text: row.get("DDTEXT").cloned().unwrap_or_default(),
+            value: row.get("LOW").map(|v| v.clone().into_chars()).unwrap_or_default(),
+            text: row.get("DDTEXT").map(|v| v.clone().into_chars()).unwrap_or_default(),
         })
         .collect();
 
     Ok(FieldSemantics {
         field: field.to_uppercase(),
-        data_element: dfies.get("ROLLNAME").cloned().unwrap_or_default(),
-        domain: dfies.get("DOMNAME").cloned().unwrap_or_default(),
-        check_table: dfies.get("CHECKTABLE").cloned().unwrap_or_default(),
-        description: dfies.get("FIELDTEXT").cloned().unwrap_or_default(),
-        medium_label: dfies.get("SCRTEXT_M").cloned().unwrap_or_default(),
+        data_element: dfies.get("ROLLNAME").map(|v| v.clone().into_chars()).unwrap_or_default(),
+        domain: dfies.get("DOMNAME").map(|v| v.clone().into_chars()).unwrap_or_default(),
+        check_table: dfies.get("CHECKTABLE").map(|v| v.clone().into_chars()).unwrap_or_default(),
+        description: dfies.get("FIELDTEXT").map(|v| v.clone().into_chars()).unwrap_or_default(),
+        medium_label: dfies.get("SCRTEXT_M").map(|v| v.clone().into_chars()).unwrap_or_default(),
         fixed_values,
     })
 }
@@ -186,6 +189,7 @@ fn dfies_field_spec() -> Vec<FieldSpec> {
     .map(|name| FieldSpec {
         name: name.to_string(),
         max_len: Some(79),
+        auto: false,
     })
     .collect()
 }
@@ -196,10 +200,12 @@ fn fixed_values_spec() -> Vec<FieldSpec> {
         FieldSpec {
             name: "LOW".to_string(),
             max_len: Some(10),
+            auto: false,
         },
         FieldSpec {
             name: "DDTEXT".to_string(),
             max_len: Some(60),
+            auto: false,
         },
     ]
 }
@@ -248,7 +254,9 @@ pub fn read_function_doc(
             // TLINE 结构：TDFORMAT(2) + TDLINE(132)，拼接所有 TDLINE 成完整文档
             let long_text = lines
                 .iter()
-                .map(|row| row.get("TDLINE").cloned().unwrap_or_default())
+                .map(|row| {
+                    row.get("TDLINE").map(|v| v.clone().into_chars()).unwrap_or_default()
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             Ok(FunctionDoc {
@@ -276,10 +284,12 @@ fn text_lines_spec() -> Vec<FieldSpec> {
         FieldSpec {
             name: "TDFORMAT".to_string(),
             max_len: Some(2),
+            auto: false,
         },
         FieldSpec {
             name: "TDLINE".to_string(),
             max_len: Some(132),
+            auto: false,
         },
     ]
 }

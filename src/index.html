@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rust-sap-rfc · SAP NWRFC REST 网关</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 820px; margin: 0 auto; padding: 40px 20px 60px; color: #1f2328; background: #fafbfc; }
+  a { color: #0969da; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; background: #eff1f3; padding: 2px 6px; border-radius: 4px; }
+  pre { background: #161b22; color: #e6edf3; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+  pre code { background: none; color: inherit; padding: 0; }
+
+  /* Hero */
+  .hero { background: #fff; border: 1px solid #d0d7de; border-radius: 12px; padding: 32px; margin-bottom: 24px; }
+  .hero h1 { margin: 0 0 8px; font-size: 26px; font-weight: 700; }
+  .hero .lede { margin: 0 0 4px; color: #57606a; font-size: 15px; }
+
+  /* Agent 卡片 */
+  .agent { background: linear-gradient(135deg, #ddf4ff 0%, #dafbe1 100%); border: 1px solid #54aeff; border-radius: 12px; padding: 24px; margin-bottom: 32px; }
+  .agent-title { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 700; color: #0969da; margin: 0 0 8px; }
+  .agent-title svg { flex-shrink: 0; }
+  .agent p { margin: 8px 0; color: #1f2328; }
+  .agent-url { display: inline-flex; align-items: center; gap: 8px; background: #fff; border: 1px solid #54aeff; padding: 8px 8px 8px 16px; border-radius: 8px; font-family: monospace; font-size: 14px; font-weight: 600; word-break: break-all; }
+  .agent-url a { color: #0969da; }
+  .copy-btn { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; background: #0969da; color: #fff; border: none; border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background .15s; }
+  .copy-btn:hover { background: #0860c9; }
+  .copy-btn.copied { background: #1a7f37; }
+  .copy-btn svg { width: 14px; height: 14px; }
+  .agent .hint { font-size: 13px; color: #57606a; }
+
+  /* 章节标题 */
+  h2.section { font-size: 14px; font-weight: 600; color: #57606a; text-transform: uppercase; letter-spacing: 0.5px; margin: 36px 0 12px; }
+
+  /* 端点卡片网格 */
+  .grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .ep { display: flex; align-items: center; gap: 12px; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 12px 16px; transition: box-shadow .15s; }
+  .ep:hover { box-shadow: 0 1px 6px rgba(0,0,0,.08); }
+  .method { display: inline-block; min-width: 48px; text-align: center; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 4px; flex-shrink: 0; }
+  .m-get { background: #dafbe1; color: #1a7f37; border: 1px solid #4ac26b; }
+  .m-post { background: #ddf4ff; color: #0969da; border: 1px solid #54aeff; }
+  .ep code { background: none; padding: 0; font-size: 13px; font-weight: 500; color: #24292f; }
+  .ep .desc { margin-left: auto; font-size: 13px; color: #57606a; text-align: right; }
+
+  footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #d0d7de; font-size: 13px; color: #57606a; }
+  footer a { margin-right: 16px; }
+
+  @media (max-width: 600px) {
+    .ep { flex-wrap: wrap; }
+    .ep .desc { margin-left: 0; width: 100%; text-align: left; color: #8c959f; font-size: 12px; }
+    .hero h1 { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>rust-sap-rfc</h1>
+  <p class="lede">SAP NWRFC → REST 网关服务 · 一个端点调用任意 BAPI，5 个元数据端点供 AI 自主探索</p>
+</div>
+
+<div class="agent">
+  <div class="agent-title">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg>
+    给 AI / Agent 用？
+  </div>
+  <p>把这个链接直接粘贴给 Claude / GPT 等 Agent，它就能自主搜索函数、查参数、调 SAP：</p>
+  <p><span class="agent-url"><a href="/agents.md" id="agent-link">{{AGENTS_URL}}</a><button class="copy-btn" onclick="copyLink(this)" title="复制链接"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制</button></span></p>
+  <p class="hint">Agent 读取这份文档后，就知道有哪些端点、怎么调、操作流程</p>
+</div>
+
+<h2 class="section">通用调用</h2>
+<div class="grid">
+  <div class="ep"><span class="method m-post">POST</span><code>/api/rfc</code><span class="desc">通用 RFC 调用</span></div>
+</div>
+
+<h2 class="section">面向 AI 的元数据 API</h2>
+<div class="grid">
+  <div class="ep"><span class="method m-get">GET</span><code>/api/functions/&#123;name&#125;</code><span class="desc">查函数接口（参数/类型/嵌套字段）</span></div>
+  <div class="ep"><span class="method m-post">POST</span><code>/api/functions/search</code><span class="desc">搜索函数模块</span></div>
+  <div class="ep"><span class="method m-get">GET</span><code>/api/functions/&#123;name&#125;/doc</code><span class="desc">查函数文档（短文本 + SE37 长文档）</span></div>
+  <div class="ep"><span class="method m-get">GET</span><code>/api/ddic/type/&#123;name&#125;</code><span class="desc">查 DDIC 结构/表字段定义</span></div>
+  <div class="ep"><span class="method m-get">GET</span><code>/api/ddic/field/&#123;table&#125;/&#123;field&#125;</code><span class="desc">查字段语义（数据元素/域/固定值）</span></div>
+</div>
+
+<h2 class="section">其他端点</h2>
+<div class="grid">
+  <div class="ep"><span class="method m-get">GET</span><code>/</code><span class="desc">本页面</span></div>
+  <div class="ep"><span class="method m-get">GET</span><code>/agents.md</code><span class="desc">AI/Agent 操作文档</span></div>
+  <div class="ep"><span class="method m-get">GET</span><code>/health</code><span class="desc">健康检查（不触碰 SAP）</span></div>
+</div>
+
+<h2 class="section">连通测试</h2>
+<pre><code>curl -X POST {{BASE_URL}}/api/rfc \
+  -H "Content-Type: application/json" \
+  -d '{"func_name":"STFC_CONNECTION","inputs":{"REQUTEXT":"hi"},"string_outputs":{"ECHOTEXT":255,"RESPTEXT":255}}'</code></pre>
+
+<footer>
+  <a href="https://github.com/Jack-Liang/rust_sap_rfc">项目源码</a>
+  <a href="https://github.com/Jack-Liang/rust_sap_rfc/issues">问题反馈</a>
+  <span style="float:right">完整文档见 <code>README.md</code> / <code>AGENTS.md</code></span>
+</footer>
+
+<script>
+function copyLink(btn) {
+  const url = document.getElementById('agent-link').href;
+  navigator.clipboard.writeText(url).then(function() {
+    const orig = btn.innerHTML;
+    btn.classList.add('copied');
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>已复制';
+    setTimeout(function() { btn.classList.remove('copied'); btn.innerHTML = orig; }, 2000);
+  }).catch(function() {
+    // clipboard API 不可用（如非 HTTPS/localhost），降级选中文本让用户 Cmd+C
+    const range = document.createRange(); range.selectNode(document.getElementById('agent-link'));
+    window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+    btn.textContent = '已选中，按 Cmd/Ctrl+C';
+  });
+}
+</script>
+
+</body>
+</html>

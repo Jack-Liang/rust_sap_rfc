@@ -69,4 +69,22 @@ mod tests {
         let uc = str_to_sap_uc("X");
         assert_eq!(uc, vec![b'X' as u16, 0]);
     }
+
+    #[test]
+    fn empty_string_produces_just_nul() {
+        // 空字符串 → 只有终止符 [0]
+        let uc = str_to_sap_uc("");
+        assert_eq!(uc, vec![0u16]);
+        // 往返应仍是空
+        let back = unsafe { sap_uc_to_string(uc.as_ptr(), uc.len()) };
+        assert_eq!(back, "");
+    }
+
+    #[test]
+    fn max_len_zero_reads_nothing() {
+        // max_len=0 时，循环体不执行，返回空字符串（不 panic）
+        let uc = str_to_sap_uc("ABC");
+        let s = unsafe { sap_uc_to_string(uc.as_ptr(), 0) };
+        assert_eq!(s, "");
+    }
 }

@@ -13,7 +13,7 @@ use crate::connection::{get_field_infos, RfcConnection};
 use crate::error::RfcError;
 use crate::ffi::{RFCTYPE_STRUCTURE, RFCTYPE_TABLE};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{OnceLock, RwLock};
 
 /// 嵌套结构体递归深度上限，防止 ABAP 深层自引用导致栈溢出。
 const MAX_RECURSION_DEPTH: usize = 5;
@@ -53,16 +53,16 @@ pub struct FuncMetadata {
 }
 
 /// 函数元数据缓存：函数名 -> 元数据
-static FUNC_CACHE: OnceLock<Mutex<HashMap<String, FuncMetadata>>> = OnceLock::new();
+static FUNC_CACHE: OnceLock<RwLock<HashMap<String, FuncMetadata>>> = OnceLock::new();
 /// DDIC 类型字段缓存：类型名 -> 字段列表
-static TYPE_CACHE: OnceLock<Mutex<HashMap<String, Vec<TypeFieldMeta>>>> = OnceLock::new();
+static TYPE_CACHE: OnceLock<RwLock<HashMap<String, Vec<TypeFieldMeta>>>> = OnceLock::new();
 
-fn func_cache() -> &'static Mutex<HashMap<String, FuncMetadata>> {
-    FUNC_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn func_cache() -> &'static RwLock<HashMap<String, FuncMetadata>> {
+    FUNC_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-fn type_cache() -> &'static Mutex<HashMap<String, Vec<TypeFieldMeta>>> {
-    TYPE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn type_cache() -> &'static RwLock<HashMap<String, Vec<TypeFieldMeta>>> {
+    TYPE_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 /// 把 type_desc_handle 递归解析成 TypeFieldMeta 列表。
@@ -141,12 +141,13 @@ fn fetch_metadata(conn: &RfcConnection, func_name: &str) -> Result<FuncMetadata,
 
 /// 获取某函数的元数据。命中缓存直接返回；未命中则从 SAP 拉取并缓存。
 pub fn get_metadata(conn: &RfcConnection, func_name: &str) -> Result<FuncMetadata, RfcError> {
-    // 先查缓存（快路径）
+    // 先查缓存（快路径，读锁）
     {
-        let map = func_cache().lock().map_err(|e| RfcError {
+        let map = func_cache().read().map_err(|e| RfcError {
             code: -1,
             message: format!("元数据缓存锁被毒化: {}", e),
             key: String::new(),
+            ..Default::default()
         })?;
         if let Some(meta) = map.get(func_name) {
             return Ok(meta.clone());
@@ -155,10 +156,11 @@ pub fn get_metadata(conn: &RfcConnection, func_name: &str) -> Result<FuncMetadat
 
     // 未命中：从 SAP 拉取
     let meta = fetch_metadata(conn, func_name)?;
-    let mut map = func_cache().lock().map_err(|e| RfcError {
+    let mut map = func_cache().write().map_err(|e| RfcError {
         code: -1,
         message: format!("元数据缓存锁被毒化: {}", e),
         key: String::new(),
+        ..Default::default()
     })?;
     map.insert(func_name.to_string(), meta.clone());
     tracing::debug!(
@@ -194,12 +196,13 @@ pub fn get_type_fields(
     type_name: &str,
 ) -> Result<Vec<TypeFieldMeta>, RfcError> {
     let upper = type_name.to_uppercase();
-    // 先查缓存（快路径）
+    // 先查缓存（快路径，读锁）
     {
-        let map = type_cache().lock().map_err(|e| RfcError {
+        let map = type_cache().read().map_err(|e| RfcError {
             code: -1,
             message: format!("类型缓存锁被毒化: {}", e),
             key: String::new(),
+            ..Default::default()
         })?;
         if let Some(fields) = map.get(&upper) {
             return Ok(fields.clone());
@@ -211,10 +214,11 @@ pub fn get_type_fields(
     // SAFETY: type_handle 来自刚获取的有效类型描述符，连接仍有效
     let fields = unsafe { resolve_fields_recursive(type_handle, 0) }?;
 
-    let mut map = type_cache().lock().map_err(|e| RfcError {
+    let mut map = type_cache().write().map_err(|e| RfcError {
         code: -1,
         message: format!("类型缓存锁被毒化: {}", e),
         key: String::new(),
+        ..Default::default()
     })?;
     map.insert(upper.clone(), fields.clone());
     tracing::debug!(r#type = %upper, fields = fields.len(), "DDIC 类型字段已缓存");

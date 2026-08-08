@@ -7,7 +7,6 @@ mod executor;
 mod ffi;
 mod function;
 mod metadata;
-mod openapi;
 mod pool;
 mod server;
 mod server_config;
@@ -84,8 +83,7 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(pool_size = cfg.pool_size, "SAP 系统连接成功（多连接池）");
     let shared: server::SharedPool = Arc::new(pool);
 
-    let shutdown = make_shutdown_signal();
-    server::run(shared, &cfg.listen_addr, shutdown).await?;
+    server::run(shared, &cfg.listen_addr, wait_shutdown_signal()).await?;
     Ok(())
 }
 
@@ -149,11 +147,6 @@ async fn wait_shutdown_signal() {
         _ = ctrl_c => tracing::info!("收到 Ctrl+C 信号"),
         _ = terminate => tracing::info!("收到 SIGTERM 信号"),
     }
-}
-
-/// 构造优雅停机信号 future（client 模式用）
-fn make_shutdown_signal() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
-    Box::pin(wait_shutdown_signal())
 }
 
 /// 配置缺失时的友好引导。检测「无 .env 文件」这一典型场景，给出针对性步骤。
