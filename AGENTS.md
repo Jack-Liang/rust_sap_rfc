@@ -59,6 +59,7 @@ curl -X POST http://127.0.0.1:3000/api/functions/search \
 
 - `pattern`：函数名通配符，`*` 匹配任意。如 `BAPI_*`、`RFC_*`。
 - 返回 `functions` 数组，每项含 `name` / `group` / `description`。
+- 无匹配返回 `200 {"count":0,"functions":[]}`（**不是错误**）。
 
 ### 2. 查函数接口
 
@@ -142,9 +143,10 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 4. **BCD/INT8/二进制**用显式类型标记：`{"type":"BCD","value":"123.45"}`、`{"type":"BYTES","value":"<base64>"}`。
 5. **BAPI 要显式提交事务**：写操作的 BAPI（CREATE/UPDATE/DELETE）成功后需调 `BAPI_TRANSACTION_COMMIT`，否则改动不生效。
 6. **错误看 RETURN**：BAPI 通常不报 HTTP 错，而是返回 `RETURN` 表里带 `TYPE=E`（错误）的行。`read_return: true` 能自动带出。
-7. **HTTP 状态码有语义**：4xx（400/403/404）多为调用方问题（参数错/未授权/函数不存在），5xx（500/502/504）多为 SAP 系统或网络问题。详见响应体 `error.code`。
+7. **HTTP 状态码有语义**：4xx（400/401/403/404/405/429）多为调用方问题，5xx（500/502/504）多为 SAP 系统或网络问题。响应体 `error.code`=HTTP 状态码、`error.key`=机器码（如 `FU_NOT_FOUND`/`AUTH_INVALID`/`RATE_LIMITED`），按二者精确分支。
 8. **透明表查询受限**：端点 4/5 对 DDIC 结构普遍可用，透明表（如 MARA）视系统配置可能 `NOT_FOUND`。
 9. **调用有超时**：单次 SAP 调用默认 60s 超时（`SAP_REQUEST_TIMEOUT_SECS` 可配），超时返回 `504`。`/api/rfc` 可在请求体传 `timeout_secs` per-request 覆盖（慢接口如批量 BAPI、大表查询可放宽）。
+10. **限流**：设了 `SAP_RATE_LIMIT_RPS` 时，`/api` 按调用方 IP 限速；超限返回 `429`（`key=RATE_LIMITED`）。默认不限流。
 
 ## 典型任务示例
 
@@ -177,6 +179,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 
 - `GET /health` —— liveness，**不触碰 SAP**，秒回 `{"status":"ok"}`，判断进程是否存活。
 - `GET /ready` —— readiness，借连接池调 `RFC_PING`（5s 超时）验证 SAP 可达；成功 `{"status":"ready","sap":"ok"}`，失败/超时返回 `503`。
+- `GET /metrics` —— Prometheus 指标（免鉴权）：连接池 idle/total/max、RFC 调用计数/耗时。供采集系统抓取。
 
 ```bash
 curl http://127.0.0.1:3000/health

@@ -56,7 +56,13 @@ pub fn search_functions(
         ..Default::default()
     };
 
-    let resp = execute_collect(conn, &req)?;
+    // 无匹配时 SAP 抛 ABAP_EXCEPTION(NO_FUNCTION_FOUND)——按搜索 API 惯例视为"空结果"而非错误。
+    // （且避免 error_info.message 残留上次失败调用信息，误导调用方 / 串扰多用户）
+    let resp = match execute_collect(conn, &req) {
+        Ok(r) => r,
+        Err(e) if e.key == "NO_FUNCTION_FOUND" => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
     let table = resp.tables.get("FUNCTIONS").cloned().unwrap_or_default();
 
     let mut out = Vec::new();
