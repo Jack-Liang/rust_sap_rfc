@@ -219,6 +219,11 @@ pub struct InvokeRequest {
     /// 是否自动读取 RETURN 表（BAPI 通用返回消息表）
     #[serde(default)]
     pub read_return: bool,
+
+    /// 本次调用的超时秒数（可选，≥1 生效）。不传或传 0 则用全局 `SAP_REQUEST_TIMEOUT_SECS`（默认 60s）。
+    /// 让调用方对已知慢接口（批量 BAPI、大表查询）自主放宽超时；超时返回 504。
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 }
 
 /// 为 discovery 模块的程序化构造提供便利：func_name 默认空（调用方必须覆盖），
@@ -236,6 +241,7 @@ impl Default for InvokeRequest {
             table_outputs: HashMap::new(),
             struct_outputs: HashMap::new(),
             read_return: false,
+            timeout_secs: None,
         }
     }
 }

@@ -15,6 +15,8 @@ pub struct AppConfig {
     pub pool_size: usize,
     /// 可选 API key：设置后 `/api/*` 需 Bearer token；`None` = 免鉴权
     pub api_key: Option<String>,
+    /// 单次 SAP 调用的全局超时（默认 60s，由 `SAP_REQUEST_TIMEOUT_SECS` 配置）
+    pub request_timeout: std::time::Duration,
 }
 
 fn required(key: &str) -> Result<String, String> {
@@ -37,6 +39,14 @@ pub fn load() -> Result<AppConfig, String> {
         .unwrap_or(8);
     // API key：留空/未设 → None（免鉴权）；设置后 /api/* 要求 Bearer token
     let api_key = env::var("SAP_API_KEY").ok().filter(|s| !s.is_empty());
+    // 全局请求超时（默认 60s，≥1）
+    let request_timeout = std::time::Duration::from_secs(
+        env::var("SAP_REQUEST_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|&n| n >= 1)
+            .unwrap_or(60),
+    );
 
     // 键为 'static 字面量，值使用环境变量的 String（运行期存活）
     Ok(AppConfig {
@@ -51,6 +61,7 @@ pub fn load() -> Result<AppConfig, String> {
         listen_addr,
         pool_size,
         api_key,
+        request_timeout,
     })
 }
 
@@ -76,6 +87,7 @@ mod tests {
             "SAP_LANG",
             "SAP_LISTEN_ADDR",
             "SAP_API_KEY",
+            "SAP_REQUEST_TIMEOUT_SECS",
         ] {
             unsafe {
                 std::env::remove_var(k);
@@ -121,6 +133,27 @@ mod tests {
         let cfg = load().unwrap();
         assert_eq!(cfg.conn_params[5], ("LANG", "ZH".to_string()));
         assert_eq!(cfg.listen_addr, "0.0.0.0:8080");
+    }
+
+    #[test]
+    fn load_respects_request_timeout() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_env();
+        set_all_required();
+        unsafe {
+            std::env::set_var("SAP_REQUEST_TIMEOUT_SECS", "120");
+        }
+        let cfg = load().unwrap();
+        assert_eq!(cfg.request_timeout, std::time::Duration::from_secs(120));
+    }
+
+    #[test]
+    fn load_defaults_request_timeout_to_60s() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_env();
+        set_all_required();
+        let cfg = load().unwrap();
+        assert_eq!(cfg.request_timeout, std::time::Duration::from_secs(60));
     }
 
     #[test]

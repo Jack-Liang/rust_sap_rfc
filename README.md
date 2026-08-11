@@ -186,6 +186,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 | `SAP_LANG` | ❌ | `EN` | 登录语言（也影响文档端点的默认语言） |
 | `SAP_LISTEN_ADDR` | ❌ | `127.0.0.1:3000` | HTTP 服务监听地址 |
 | `SAP_POOL_SIZE` | ❌ | `8` | SAP 连接池上限（并发调用数），≥1 |
+| `SAP_REQUEST_TIMEOUT_SECS` | ❌ | `60` | 单次 SAP 调用全局超时（秒），≥1；超时返回 504。`/api/rfc` 可用请求体 `timeout_secs` per-request 覆盖 |
 | `SAP_ROLE` | ❌ | `client` | 运行模式：`client`/`server`/`both`（server 模式见 [§9](#9-server-端模式被-sap-调用)） |
 | `SAP_SDK_DIR` | ❌ | `./nwrfcsdk` | SDK 根目录（Docker/CI/自定义路径用） |
 
@@ -252,6 +253,7 @@ curl -H "Authorization: Bearer $SAP_API_KEY" \
 | `table_outputs` | object | ❌ | 要读取的输出表：表名 → 字段对象数组 `{"name":"...","max_len":...,"auto":...}`（`auto:true` 时按真实类型读，默认 false） |
 | `struct_outputs` | object | ❌ | 要读取的顶层结构体输出：结构体名 → 字段对象数组（同 `table_outputs` 的字段规则） |
 | `read_return` | bool | ❌ | 是否自动读取 BAPI 通用 `RETURN` 消息表，默认 `false` |
+| `timeout_secs` | u64? | ❌ | 本次调用超时秒数（≥1 生效）；不传/传 0 用全局 `SAP_REQUEST_TIMEOUT_SECS`（默认 60s），超时返回 504。供慢接口（批量 BAPI、大表查询）自主放宽 |
 
 **值类型规则**（`inputs` / `table_inputs` / `struct_inputs` 的字段值）：
 

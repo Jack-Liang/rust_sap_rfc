@@ -86,6 +86,8 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     let auth_enabled = cfg.api_key.is_some();
     auth::init(cfg.api_key);
     tracing::info!(auth_enabled, "API 认证配置");
+    // 全局请求超时（/api/rfc 还支持 per-request timeout_secs 覆盖）
+    server::init_request_timeout(cfg.request_timeout);
     let shared: server::SharedPool = Arc::new(pool);
 
     server::run(shared, &cfg.listen_addr, wait_shutdown_signal()).await?;

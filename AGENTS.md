@@ -124,6 +124,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 - `table_outputs`：要遍历的 EXPORT 表 → 字段列表。字段项 `{"name":"FIELD"}` 或 `{"name":"FIELD","max_len":12}`；加 `"auto":true` 让该字段按真实类型读（INT→整数、FLOAT→浮点、INT8→i64、BYTE/XSTRING→Base64、其余→字符串）
 - `struct_outputs`：顶层结构体输出 → 字段列表（规则同 `table_outputs`）
 - `read_return`：是否自动读 BAPI 的 RETURN 消息表
+- `timeout_secs`：本次调用超时秒数（可选，≥1）。不传用全局默认 60s；慢接口（批量 BAPI、大表查询）可自主放宽。超时返回 504
 
 响应体：
 - `scalars`：标量输出（参数名 → 值，值类型由读取方式决定）
@@ -143,6 +144,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 6. **错误看 RETURN**：BAPI 通常不报 HTTP 错，而是返回 `RETURN` 表里带 `TYPE=E`（错误）的行。`read_return: true` 能自动带出。
 7. **HTTP 状态码有语义**：4xx（400/403/404）多为调用方问题（参数错/未授权/函数不存在），5xx（500/502/504）多为 SAP 系统或网络问题。详见响应体 `error.code`。
 8. **透明表查询受限**：端点 4/5 对 DDIC 结构普遍可用，透明表（如 MARA）视系统配置可能 `NOT_FOUND`。
+9. **调用有超时**：单次 SAP 调用默认 60s 超时（`SAP_REQUEST_TIMEOUT_SECS` 可配），超时返回 `504`。`/api/rfc` 可在请求体传 `timeout_secs` per-request 覆盖（慢接口如批量 BAPI、大表查询可放宽）。
 
 ## 典型任务示例
 

@@ -16,30 +16,73 @@ use crate::executor::execute_collect;
 use crate::pool::RfcConnectionPool;
 use axum::response::IntoResponse;
 use axum::{routing::post, Json, Router};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 /// 全局共享状态：连接池（内部含连接 + 重连参数）
 pub type SharedPool = Arc<RfcConnectionPool>;
 
-/// 在阻塞线程池内通过连接池执行一个 SAP 调用。
+/// 全局请求超时（启动期由 [`init_request_timeout`] 写入，默认 60s）。
+static REQUEST_TIMEOUT: OnceLock<Duration> = OnceLock::new();
+
+/// 启动期设置全局请求超时（main 调一次）。
+pub fn init_request_timeout(d: Duration) {
+    let _ = REQUEST_TIMEOUT.set(d);
+}
+
+/// 当前全局请求超时；未初始化时回退 60s。
+fn request_timeout() -> Duration {
+    REQUEST_TIMEOUT
+        .get()
+        .copied()
+        .unwrap_or_else(|| Duration::from_secs(60))
+}
+
+/// 构造超时错误（504 Gateway Timeout，body 走 ErrorResponse）。
+fn timeout_error(timeout: Duration) -> RfcError {
+    RfcError {
+        code: -1,
+        status: 504,
+        message: format!("SAP 调用超时（{}s）", timeout.as_secs()),
+        ..Default::default()
+    }
+}
+
+/// 用指定超时在阻塞线程池内执行 SAP 调用。
 ///
-/// 把 `spawn_blocking` + `with_connection`（含自动重连）+ Join 失败的错误映射
-/// 收敛到一处，handler 只需提供业务闭包。FFI 与连接池内部状态都被限制在
-/// 阻塞闭包中，绝不跨 await 点，保证 future 干净 Send。
-async fn run_blocking<F, R>(pool: SharedPool, f: F) -> Result<R, RfcError>
+/// `spawn_blocking` + `with_connection`（含自动重连）+ `tokio::time::timeout` 收敛到一处。
+/// 超时返回 504。注意：超时后 `spawn_blocking` 线程无法取消，FFI 会跑到 SAP 响应才归还
+/// 连接（NWRFC 固有限制，靠协议层超时兜底）。FFI 与连接池内部状态都被限制在阻塞闭包中，
+/// 绝不跨 await 点，保证 future 干净 Send。
+async fn run_blocking_with_timeout<F, R>(
+    pool: SharedPool,
+    timeout: Duration,
+    f: F,
+) -> Result<R, RfcError>
 where
     F: FnMut(&RfcConnection) -> Result<R, RfcError> + Send + 'static,
     R: Send + 'static,
 {
     let pool = Arc::clone(&pool);
-    tokio::task::spawn_blocking(move || pool.with_connection(f))
-        .await
-        .map_err(|e| RfcError {
+    let join = tokio::task::spawn_blocking(move || pool.with_connection(f));
+    match tokio::time::timeout(timeout, join).await {
+        Ok(inner) => inner.map_err(|e| RfcError {
             code: -1,
             message: format!("阻塞任务失败: {}", e),
             key: String::new(),
             ..Default::default()
-        })?
+        })?,
+        Err(_elapsed) => Err(timeout_error(timeout)),
+    }
+}
+
+/// 用全局默认超时执行（元数据查询等无需 per-request 超时的端点用这个）。
+async fn run_blocking<F, R>(pool: SharedPool, f: F) -> Result<R, RfcError>
+where
+    F: FnMut(&RfcConnection) -> Result<R, RfcError> + Send + 'static,
+    R: Send + 'static,
+{
+    run_blocking_with_timeout(pool, request_timeout(), f).await
 }
 
 /// 仅静态路由（不依赖 SAP 连接池）：首页 / Agent 文档 / 健康检查。
@@ -184,8 +227,15 @@ async fn invoke_handler(
     let started = std::time::Instant::now();
     let func_name = req.func_name.clone();
 
+    // per-request 超时：调用方可对慢接口自主放宽；不传/传 0 → 用全局默认
+    let timeout = req
+        .timeout_secs
+        .filter(|&s| s >= 1)
+        .map(Duration::from_secs)
+        .unwrap_or_else(request_timeout);
     // 通过 with_connection 执行：遇通信错误自动重连重试一次
-    let resp = run_blocking(pool, move |conn| execute_collect(conn, &req)).await?;
+    let resp = run_blocking_with_timeout(pool, timeout, move |conn| execute_collect(conn, &req))
+        .await?;
 
     tracing::info!(
         func = %func_name,
@@ -411,6 +461,17 @@ mod tests {
     use super::*;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+
+    #[test]
+    fn timeout_error_is_504() {
+        let e = timeout_error(Duration::from_secs(60));
+        assert_eq!(e.status, 504, "超时错误应为 504");
+        assert!(
+            e.message.contains("60"),
+            "消息应含超时秒数: {}",
+            e.message
+        );
+    }
 
     /// 读取 axum 响应 body 为 String
     async fn body_string(body: axum::body::Body) -> String {
