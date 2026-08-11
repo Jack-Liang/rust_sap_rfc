@@ -1,0 +1,58 @@
+name: CI
+
+# 每次 push / PR 跑 clippy + 单测，保证回归。
+# 集成测试（#[ignore]，需真 SAP）不在 CI 跑——CI 无 SAP NWRFC SDK。
+#
+# 关键：CI 用空的 libsapnwrfc.so 占位（stub）满足编译期链接 + 单测运行期 load。
+# 单测不调 SAP FFI，stub 不影响；集成测试标 #[ignore] 默认跳过。
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  clippy-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain (stable + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # CI 无真实 SAP SDK（受版权限制）。生成空 libsapnwrfc.so 占位：
+      # - 编译期：build.rs 要求链接 sapnwrfc，stub 提供符号占位
+      # - 运行期：单测启动 load stub（不调 SAP FFI，无影响）
+      - name: Prepare stub SAP SDK
+        run: |
+          STUB=nwrfcsdk/lib/linux-x86_64
+          mkdir -p "$STUB"
+          echo "int sapnwrfc_stub;" > /tmp/stub.c
+          cc -c /tmp/stub.c -o /tmp/stub.o
+          cc -shared -o "$STUB/libsapnwrfc.so" /tmp/stub.o
+          ls -la "$STUB"
+
+      # clippy：报告 lint（暂不 -D warnings，遗留 warning 待后续清理；加 -D 前先把代码清干净）
+      - name: Clippy
+        run: cargo clippy --all-targets
+
+      # 单测门禁：默认跳过 #[ignore] 的 SAP 集成测试
+      - name: Test
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/nwrfcsdk/lib/linux-x86_64
+        run: cargo test

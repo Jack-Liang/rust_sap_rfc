@@ -284,10 +284,9 @@ fn ddic_field_semantics_has_fixed_values() {
     let body: serde_json::Value = resp.json().unwrap();
     assert_eq!(body["field"], "TYPE");
     // TYPE 字段应返回语义元数据（data_element / domain / description 至少其一非空）
-    let has_semantics = body["data_element"].as_str().unwrap_or("").is_empty()
-        == false
-        || body["domain"].as_str().unwrap_or("").is_empty() == false
-        || body["description"].as_str().unwrap_or("").is_empty() == false;
+    let has_semantics = !body["data_element"].as_str().unwrap_or("").is_empty()
+        || !body["domain"].as_str().unwrap_or("").is_empty()
+        || !body["description"].as_str().unwrap_or("").is_empty();
     assert!(
         has_semantics,
         "TYPE 字段应返回语义元数据, 实际: {}",
