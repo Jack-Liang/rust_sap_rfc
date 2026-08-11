@@ -8,7 +8,7 @@
 use crate::api::{
     direction_name, rfctype_name, DdicTypeResponse, FieldDef, FieldSemanticsResponse, FixedValueDto,
     FunctionDocResponse, FunctionInterface, FunctionParam, InvokeRequest, InvokeResponse, ParamDoc,
-    SearchFunctionEntry, SearchResponse,
+    ScalarValue, SearchFunctionEntry, SearchResponse,
 };
 use crate::connection::{get_field_infos, RfcConnection};
 use crate::error::RfcError;
@@ -144,9 +144,12 @@ pub async fn run(
     tracing::info!("   👉 给 AI/Agent 的文档: http://{}/agents.md", display_host);
     tracing::info!("   端点速览: POST /api/rfc | GET /api/functions/:name | POST /api/functions/search");
     tracing::info!("           GET /api/functions/:name/doc | GET /api/ddic/type/:name | GET /api/ddic/field/:t/:f");
-    axum::serve(listener, app(pool))
-        .with_graceful_shutdown(shutdown)
-        .await
+    axum::serve(
+        listener,
+        app(pool).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
 }
 
 /// GET /health —— 不触碰 SAP，便于外部探活（liveness）
@@ -232,15 +235,72 @@ async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::resp
     axum::response::Html(html)
 }
 
+/// 审计用：把请求参数压缩成可读摘要（敏感值脱敏、长值截断、键排序稳定）。
+fn summarize_params(req: &InvokeRequest) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !req.inputs.is_empty() {
+        let mut keys: Vec<&String> = req.inputs.keys().collect();
+        keys.sort();
+        let kvs: Vec<String> = keys
+            .iter()
+            .map(|k| format!("{}={}", k, mask_value(k, &req.inputs[*k])))
+            .collect();
+        parts.push(format!("inputs{{{}}}", kvs.join(", ")));
+    }
+    if !req.table_inputs.is_empty() {
+        let mut keys: Vec<&String> = req.table_inputs.keys().collect();
+        keys.sort();
+        let tabs: Vec<String> = keys
+            .iter()
+            .map(|k| format!("{}[{}行]", k, req.table_inputs[*k].len()))
+            .collect();
+        parts.push(format!("tables{{{}}}", tabs.join(", ")));
+    }
+    if !req.struct_inputs.is_empty() {
+        let mut keys: Vec<&String> = req.struct_inputs.keys().collect();
+        keys.sort();
+        let sts: Vec<String> = keys
+            .iter()
+            .map(|k| format!("{}{{{}}}", k, req.struct_inputs[*k].len()))
+            .collect();
+        parts.push(format!("structs{{{}}}", sts.join(", ")));
+    }
+    if parts.is_empty() {
+        "(无参数)".into()
+    } else {
+        parts.join(" ")
+    }
+}
+
+/// 脱敏 + 截断单个标量值（用于审计摘要）。敏感 key（密码/token 等）→ `***`，长值截断 80 字符。
+fn mask_value(key: &str, value: &ScalarValue) -> String {
+    const SENSITIVE: &[&str] = &[
+        "PASSWD", "PASSWORD", "PASS", "SECRET", "TOKEN", "CREDENTIAL", "KEY",
+    ];
+    let upper = key.to_uppercase();
+    if SENSITIVE.iter().any(|s| upper.contains(s)) {
+        return "***".into();
+    }
+    let s = value.clone().into_chars();
+    const MAX: usize = 80;
+    if s.chars().count() > MAX {
+        format!("{}…", s.chars().take(MAX).collect::<String>())
+    } else {
+        s
+    }
+}
+
 /// POST /api/rfc —— 通用 RFC 调用
 ///
 /// 流程：反序列化请求 → spawn_blocking 内通过连接池执行（含自动重连）→ 返回 JSON 结果。
 /// FFI 与连接池内部状态都被限制在阻塞闭包中，绝不跨 await 点。
 async fn invoke_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     req: Result<Json<InvokeRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<InvokeResponse>, RfcError> {
     let started = std::time::Instant::now();
+    let caller_ip = addr.ip().to_string();
     // JSON 解析/反序列化失败 → 统一错误格式（status 取 axum 语义码，body_text 作 message）
     let Json(req) = req.map_err(|r| RfcError {
         code: -1,
@@ -249,6 +309,7 @@ async fn invoke_handler(
         key: "JSON_INVALID".into(),
     })?;
     let func_name = req.func_name.clone();
+    let params = summarize_params(&req);
 
     // per-request 超时：调用方可对慢接口自主放宽；不传/传 0 → 用全局默认
     let timeout = req
@@ -257,16 +318,37 @@ async fn invoke_handler(
         .map(Duration::from_secs)
         .unwrap_or_else(request_timeout);
     // 通过 with_connection 执行：遇通信错误自动重连重试一次
-    let resp = run_blocking_with_timeout(pool, timeout, move |conn| execute_collect(conn, &req))
-        .await?;
+    let result =
+        run_blocking_with_timeout(pool, timeout, move |conn| execute_collect(conn, &req)).await;
+    let elapsed_ms = started.elapsed().as_millis() as u64;
 
-    tracing::info!(
-        func = %func_name,
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "RFC 调用完成"
-    );
-
-    Ok(Json(resp))
+    // 审计日志：成功 info / 失败 warn（失败 = 告警信号）
+    match result {
+        Ok(resp) => {
+            tracing::info!(
+                func = %func_name,
+                caller_ip = %caller_ip,
+                elapsed_ms,
+                params = %params,
+                "RFC 调用成功"
+            );
+            Ok(Json(resp))
+        }
+        Err(e) => {
+            tracing::warn!(
+                func = %func_name,
+                caller_ip = %caller_ip,
+                elapsed_ms,
+                params = %params,
+                status = e.status,
+                code = e.code,
+                key = %e.key,
+                message = %e.message,
+                "RFC 调用失败"
+            );
+            Err(e)
+        }
+    }
 }
 
 // ========================================================================
@@ -509,6 +591,47 @@ mod tests {
             "消息应含超时秒数: {}",
             e.message
         );
+    }
+
+    #[test]
+    fn mask_value_redacts_sensitive_keys() {
+        let secret = ScalarValue::Chars("s3cr3t".into());
+        assert_eq!(mask_value("PASSWORD", &secret), "***");
+        assert_eq!(mask_value("USER_PASSWD", &secret), "***");
+        assert_eq!(mask_value("API_KEY", &secret), "***");
+        assert_eq!(mask_value("TOKEN", &secret), "***");
+        // 非敏感 key 保留值
+        assert_eq!(mask_value("REQUTEXT", &ScalarValue::Chars("hi".into())), "hi");
+        assert_eq!(mask_value("MAX_ROWS", &ScalarValue::Int(100)), "100");
+    }
+
+    #[test]
+    fn mask_value_truncates_long() {
+        let long = ScalarValue::Chars("x".repeat(100));
+        let m = mask_value("REQUTEXT", &long);
+        assert!(m.ends_with('…'), "长值应以省略号结尾: {}", m);
+        assert_eq!(m.chars().count(), 81); // 80 个 x + …
+    }
+
+    #[test]
+    fn summarize_params_redacts_and_structures() {
+        let mut req = InvokeRequest::default();
+        req.func_name = "STFC_CONNECTION".into();
+        req.inputs
+            .insert("REQUTEXT".into(), ScalarValue::Chars("hi".into()));
+        req.inputs
+            .insert("PASSWORD".into(), ScalarValue::Chars("secret".into()));
+        let s = summarize_params(&req);
+        assert!(s.contains("inputs{"), "应含 inputs 块: {}", s);
+        assert!(s.contains("REQUTEXT=hi"), "应含明文值: {}", s);
+        assert!(s.contains("PASSWORD=***"), "密码应脱敏: {}", s);
+        assert!(!s.contains("secret"), "不应泄露明文密码: {}", s);
+    }
+
+    #[test]
+    fn summarize_params_empty() {
+        let req = InvokeRequest::default();
+        assert_eq!(summarize_params(&req), "(无参数)");
     }
 
     /// 读取 axum 响应 body 为 String
