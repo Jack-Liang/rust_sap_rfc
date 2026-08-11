@@ -16,8 +16,15 @@ use crate::executor::execute_collect;
 use crate::pool::RfcConnectionPool;
 use axum::response::IntoResponse;
 use axum::{routing::post, Json, Router};
+use governor::{
+    clock::DefaultClock,
+    state::keyed::DefaultKeyedStateStore,
+    Quota, RateLimiter,
+};
 use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use std::net::IpAddr;
+use std::num::NonZeroU32;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -49,6 +56,18 @@ pub fn init_metrics() {
         .install_recorder()
         .expect("安装 Prometheus 指标记录器失败");
     let _ = METRICS_HANDLE.set(handle);
+}
+
+/// 按 IP 限流器（启动期由 [`init_rate_limiter`] 写入；`None` = 不限流）。
+type IpLimiter = RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>;
+static RATE_LIMITER: OnceLock<Option<IpLimiter>> = OnceLock::new();
+
+/// 启动期设置限流：`rps=None` 或 0 → 不限流；≥1 → 按 IP 每秒 rps 个请求。
+pub fn init_rate_limiter(rps: Option<u32>) {
+    let limiter = rps
+        .filter(|&r| r >= 1)
+        .map(|r| RateLimiter::keyed(Quota::per_second(NonZeroU32::new(r).expect("rps≥1"))));
+    let _ = RATE_LIMITER.set(limiter);
 }
 
 /// 构造超时错误（504 Gateway Timeout，body 走 ErrorResponse）。
@@ -117,7 +136,8 @@ pub fn app(pool: SharedPool) -> Router {
         .route("/api/functions/:name/doc", axum::routing::get(function_doc_handler))
         .route("/api/ddic/type/:name", axum::routing::get(ddic_type_handler))
         .route("/api/ddic/field/:table/:field", axum::routing::get(ddic_field_handler))
-        .layer(axum::middleware::from_fn(crate::auth::require_api_key));
+        .layer(axum::middleware::from_fn(crate::auth::require_api_key))
+        .layer(axum::middleware::from_fn(rate_limit_middleware));
 
     // 探针与公开页免鉴权：编排系统探针不便带 token，且无业务数据泄露
     static_app()
@@ -146,6 +166,32 @@ async fn metrics_handler() -> impl axum::response::IntoResponse {
         [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
         body,
     )
+}
+
+/// 限流中间件：按 IP 限制每秒请求数；超限返回 429（统一 JSON）。未配置则放行。
+async fn rate_limit_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let Some(limiter) = RATE_LIMITER.get().and_then(|opt| opt.as_ref()) else {
+        return next.run(req).await; // 未启用限流
+    };
+    let ip = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0.ip());
+    let Some(ip) = ip else {
+        return next.run(req).await; // 拿不到 IP（不该发生，server 经 ConnectInfo 启动）
+    };
+    if limiter.check_key(&ip).is_ok() {
+        next.run(req).await
+    } else {
+        (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error":{"code":429,"message":"Rate limit exceeded (too many requests from this IP)","key":"RATE_LIMITED"}})),
+        )
+            .into_response()
+    }
 }
 
 /// 启动 HTTP 服务（阻塞当前异步任务直到服务器结束）。

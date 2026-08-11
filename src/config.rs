@@ -17,6 +17,8 @@ pub struct AppConfig {
     pub api_key: Option<String>,
     /// 单次 SAP 调用的全局超时（默认 60s，由 `SAP_REQUEST_TIMEOUT_SECS` 配置）
     pub request_timeout: std::time::Duration,
+    /// 可选限流（按 IP 的每秒请求数；None=不限流，由 `SAP_RATE_LIMIT_RPS` 配置，≥1）
+    pub rate_limit_rps: Option<u32>,
 }
 
 fn required(key: &str) -> Result<String, String> {
@@ -47,6 +49,11 @@ pub fn load() -> Result<AppConfig, String> {
             .filter(|&n| n >= 1)
             .unwrap_or(60),
     );
+    // 可选限流（按 IP 的每秒请求数；未设/0/非法 → None=不限流）
+    let rate_limit_rps = env::var("SAP_RATE_LIMIT_RPS")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|&r| r >= 1);
 
     // 键为 'static 字面量，值使用环境变量的 String（运行期存活）
     Ok(AppConfig {
@@ -62,6 +69,7 @@ pub fn load() -> Result<AppConfig, String> {
         pool_size,
         api_key,
         request_timeout,
+        rate_limit_rps,
     })
 }
 
@@ -88,6 +96,7 @@ mod tests {
             "SAP_LISTEN_ADDR",
             "SAP_API_KEY",
             "SAP_REQUEST_TIMEOUT_SECS",
+            "SAP_RATE_LIMIT_RPS",
         ] {
             unsafe {
                 std::env::remove_var(k);

@@ -90,6 +90,8 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     server::init_request_timeout(cfg.request_timeout);
     // Prometheus 指标（GET /metrics）
     server::init_metrics();
+    // 可选限流（按 IP；未设 SAP_RATE_LIMIT_RPS 则不限流）
+    server::init_rate_limiter(cfg.rate_limit_rps);
     let shared: server::SharedPool = Arc::new(pool);
 
     server::run(shared, &cfg.listen_addr, wait_shutdown_signal()).await?;
