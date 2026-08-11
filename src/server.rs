@@ -145,6 +145,7 @@ pub fn app(pool: SharedPool) -> Router {
         .route("/metrics", axum::routing::get(metrics_handler))
         .merge(api)
         .fallback(fallback_handler)
+        .layer(axum::middleware::from_fn(unify_method_not_allowed))
         .with_state(pool)
 }
 
@@ -192,6 +193,22 @@ async fn rate_limit_middleware(
         )
             .into_response()
     }
+}
+
+/// 统一框架级错误：axum 对"方法不匹配"默认返回空 body 的 405，这里改写成统一 JSON 契约。
+async fn unify_method_not_allowed(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let resp = next.run(req).await;
+    if resp.status() == axum::http::StatusCode::METHOD_NOT_ALLOWED {
+        return (
+            axum::http::StatusCode::METHOD_NOT_ALLOWED,
+            Json(serde_json::json!({"error":{"code":405,"message":"Method not allowed","key":"METHOD_NOT_ALLOWED"}})),
+        )
+            .into_response();
+    }
+    resp
 }
 
 /// 启动 HTTP 服务（阻塞当前异步任务直到服务器结束）。
