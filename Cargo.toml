@@ -21,6 +21,9 @@ base64 = "0.22"
 # 结构化日志
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# 指标（Prometheus /metrics 端点）
+metrics = "0.23"
+metrics-exporter-prometheus = "0.15"
 # Server 模式：同步 HTTP 客户端（回调线程内调用）+ TOML 配置
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 toml = "0.8"

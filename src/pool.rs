@@ -218,6 +218,33 @@ impl RfcConnectionPool {
             self.params.iter().map(|(k, v)| (*k, v.as_str())).collect();
         RfcConnection::new(&borrowed)
     }
+
+    /// 当前池状态快照（空闲 / 已建总数 / 上限），供 `/metrics` 采集。
+    /// 锁毒化时返回 0（不阻塞调用方）。
+    pub fn stats(&self) -> PoolStats {
+        match self.inner.lock() {
+            Ok(g) => PoolStats {
+                idle: g.idle.len(),
+                total: g.total,
+                max: self.max_size,
+            },
+            Err(_) => PoolStats {
+                idle: 0,
+                total: 0,
+                max: self.max_size,
+            },
+        }
+    }
+}
+
+/// 连接池状态快照（供 `/metrics`）。
+pub struct PoolStats {
+    /// 空闲连接数（可立即复用）
+    pub idle: usize,
+    /// 已创建连接总数（空闲 + 借出中）
+    pub total: usize,
+    /// 池上限
+    pub max: usize,
 }
 
 fn poison_err<T>(ctx: &str, _e: T) -> RfcError {

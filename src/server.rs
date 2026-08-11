@@ -16,6 +16,8 @@ use crate::executor::execute_collect;
 use crate::pool::RfcConnectionPool;
 use axum::response::IntoResponse;
 use axum::{routing::post, Json, Router};
+use metrics::{counter, gauge, histogram};
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -36,6 +38,17 @@ fn request_timeout() -> Duration {
         .get()
         .copied()
         .unwrap_or_else(|| Duration::from_secs(60))
+}
+
+/// Prometheus 指标记录器句柄（启动期由 [`init_metrics`] 写入）。
+static METRICS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
+
+/// 启动期初始化 Prometheus 指标记录器（main 调一次）。之后 `counter!`/`gauge!`/`histogram!` 才生效。
+pub fn init_metrics() {
+    let handle = PrometheusBuilder::new()
+        .install_recorder()
+        .expect("安装 Prometheus 指标记录器失败");
+    let _ = METRICS_HANDLE.set(handle);
 }
 
 /// 构造超时错误（504 Gateway Timeout，body 走 ErrorResponse）。
@@ -109,6 +122,7 @@ pub fn app(pool: SharedPool) -> Router {
     // 探针与公开页免鉴权：编排系统探针不便带 token，且无业务数据泄露
     static_app()
         .route("/ready", axum::routing::get(ready_handler))
+        .route("/metrics", axum::routing::get(metrics_handler))
         .merge(api)
         .fallback(fallback_handler)
         .with_state(pool)
@@ -119,6 +133,18 @@ async fn fallback_handler() -> (axum::http::StatusCode, Json<serde_json::Value>)
     (
         axum::http::StatusCode::NOT_FOUND,
         Json(serde_json::json!({"error":{"code":404,"message":"Not found","key":"ROUTE_NOT_FOUND"}})),
+    )
+}
+
+/// `GET /metrics` —— Prometheus 指标（连接池 + RFC 调用计数/耗时）。免鉴权（运维探针）。
+async fn metrics_handler() -> impl axum::response::IntoResponse {
+    let body = METRICS_HANDLE
+        .get()
+        .map(|h| h.render())
+        .unwrap_or_default();
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        body,
     )
 }
 
@@ -310,6 +336,7 @@ async fn invoke_handler(
     })?;
     let func_name = req.func_name.clone();
     let params = summarize_params(&req);
+    let pool_stats = pool.stats(); // 采样当前池状态（pool 即将 move 进闭包）
 
     // per-request 超时：调用方可对慢接口自主放宽；不传/传 0 → 用全局默认
     let timeout = req
@@ -322,9 +349,16 @@ async fn invoke_handler(
         run_blocking_with_timeout(pool, timeout, move |conn| execute_collect(conn, &req)).await;
     let elapsed_ms = started.elapsed().as_millis() as u64;
 
-    // 审计日志：成功 info / 失败 warn（失败 = 告警信号）
+    // 指标：池状态 gauge（每次调用采样）+ 调用计数/耗时（按 函数×结果 分维）
+    gauge!("pool_idle").set(pool_stats.idle as f64);
+    gauge!("pool_total").set(pool_stats.total as f64);
+    gauge!("pool_max").set(pool_stats.max as f64);
+
+    // 审计日志 + 指标：成功 info / 失败 warn（失败 = 告警信号）
     match result {
         Ok(resp) => {
+            counter!("rfc_calls_total", "func" => func_name.clone(), "result" => "ok").increment(1);
+            histogram!("rfc_call_duration_ms", "func" => func_name.clone()).record(elapsed_ms as f64);
             tracing::info!(
                 func = %func_name,
                 caller_ip = %caller_ip,
@@ -335,6 +369,8 @@ async fn invoke_handler(
             Ok(Json(resp))
         }
         Err(e) => {
+            counter!("rfc_calls_total", "func" => func_name.clone(), "result" => "err").increment(1);
+            histogram!("rfc_call_duration_ms", "func" => func_name.clone()).record(elapsed_ms as f64);
             tracing::warn!(
                 func = %func_name,
                 caller_ip = %caller_ip,

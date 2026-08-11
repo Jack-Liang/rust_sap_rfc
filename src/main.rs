@@ -88,6 +88,8 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(auth_enabled, "API 认证配置");
     // 全局请求超时（/api/rfc 还支持 per-request timeout_secs 覆盖）
     server::init_request_timeout(cfg.request_timeout);
+    // Prometheus 指标（GET /metrics）
+    server::init_metrics();
     let shared: server::SharedPool = Arc::new(pool);
 
     server::run(shared, &cfg.listen_addr, wait_shutdown_signal()).await?;
