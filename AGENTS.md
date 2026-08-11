@@ -11,6 +11,18 @@ rust_sap_rfc 是一个 **SAP NWRFC → REST 网关**：把 SAP 的 RFC/BAPI 函�
 
 服务默认监听 `http://127.0.0.1:3000`（地址可由 `SAP_LISTEN_ADDR` 覆盖）。
 
+## 认证（可选）
+
+默认**免鉴权**（本机访问）。若部署方设置了环境变量 `SAP_API_KEY`，则所有 `/api/*` 端点要求请求头 `Authorization: Bearer <token>`：
+
+```bash
+curl -H "Authorization: Bearer <SAP_API_KEY>" http://127.0.0.1:3000/api/functions/BAPI_USER_GETLIST
+```
+
+- 未带 / 错 token → `401 {"code":401,"message":"..."}`。
+- 探针 `/health`、`/ready` 与公开页 `/`、`/agents.md` **始终免鉴权**（不需要 token）。
+- 是否启用由部署方决定。本机默认环境通常免鉴权——你可先不带 token 试，收到 401 再向部署方索取。
+
 ## 你能做什么
 
 | 目标 | 用哪个端点 |
@@ -159,7 +171,15 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 
 ## 健康检查
 
+两个探针语义不同：
+
+- `GET /health` —— liveness，**不触碰 SAP**，秒回 `{"status":"ok"}`，判断进程是否存活。
+- `GET /ready` —— readiness，借连接池调 `RFC_PING`（5s 超时）验证 SAP 可达；成功 `{"status":"ready","sap":"ok"}`，失败/超时返回 `503`。
+
 ```bash
 curl http://127.0.0.1:3000/health
 # → {"status":"ok"}   （不触碰 SAP，仅探活）
+
+curl http://127.0.0.1:3000/ready
+# → {"status":"ready","sap":"ok"}   （连 SAP 跑 RFC_PING；失败返回 503）
 ```

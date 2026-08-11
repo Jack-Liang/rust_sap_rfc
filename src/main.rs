@@ -1,4 +1,5 @@
 mod api;
+mod auth;
 mod config;
 mod connection;
 mod discovery;
@@ -81,6 +82,10 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
 
     let pool = RfcConnectionPool::with_max_size(cfg.conn_params, cfg.pool_size)?;
     tracing::info!(pool_size = cfg.pool_size, "SAP 系统连接成功（多连接池）");
+    // 认证：未设 SAP_API_KEY → None（免鉴权）；设置后 /api/* 要求 Bearer token
+    let auth_enabled = cfg.api_key.is_some();
+    auth::init(cfg.api_key);
+    tracing::info!(auth_enabled, "API 认证配置");
     let shared: server::SharedPool = Arc::new(pool);
 
     server::run(shared, &cfg.listen_addr, wait_shutdown_signal()).await?;

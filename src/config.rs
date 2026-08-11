@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub listen_addr: String,
     /// SAP 连接池上限（并发 SAP 调用数）
     pub pool_size: usize,
+    /// 可选 API key：设置后 `/api/*` 需 Bearer token；`None` = 免鉴权
+    pub api_key: Option<String>,
 }
 
 fn required(key: &str) -> Result<String, String> {
@@ -33,6 +35,8 @@ pub fn load() -> Result<AppConfig, String> {
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|&n| n >= 1)
         .unwrap_or(8);
+    // API key：留空/未设 → None（免鉴权）；设置后 /api/* 要求 Bearer token
+    let api_key = env::var("SAP_API_KEY").ok().filter(|s| !s.is_empty());
 
     // 键为 'static 字面量，值使用环境变量的 String（运行期存活）
     Ok(AppConfig {
@@ -46,6 +50,7 @@ pub fn load() -> Result<AppConfig, String> {
         ],
         listen_addr,
         pool_size,
+        api_key,
     })
 }
 
@@ -70,6 +75,7 @@ mod tests {
             "SAP_PASSWD",
             "SAP_LANG",
             "SAP_LISTEN_ADDR",
+            "SAP_API_KEY",
         ] {
             unsafe {
                 std::env::remove_var(k);

@@ -30,6 +30,11 @@ impl Drop for ServerHandle {
 }
 
 fn start_server() -> ServerHandle {
+    start_server_with_env(&[])
+}
+
+/// 启动 server 子进程并等待就绪，可注入额外环境变量（如 `SAP_API_KEY` 测认证）。
+fn start_server_with_env(extra: &[(&str, &str)]) -> ServerHandle {
     ensure_sap_env();
     let port = alloc_port();
     let base_url = format!("http://127.0.0.1:{}", port);
@@ -60,6 +65,9 @@ fn start_server() -> ServerHandle {
         .env("RUST_LOG", "warn") // 减少日志噪音
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    for (k, v) in extra {
+        cmd.env(k, v);
+    }
 
     if !bin_exists {
         cmd.current_dir(manifest_dir);
@@ -110,6 +118,53 @@ fn health_check_works() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().unwrap();
     assert_eq!(body["status"], "ok");
+}
+
+#[test]
+#[ignore]
+fn ready_returns_sap_ok() {
+    // readiness 探针：借连接池调 RFC_PING，SAP 可达时应 200。
+    let _s = start_server();
+    let resp = http_client()
+        .get(format!("{}/ready", _s.base_url))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 200, "SAP 可达时 /ready 应返回 200");
+    let body: serde_json::Value = resp.json().unwrap();
+    assert_eq!(body["status"], "ready");
+    assert_eq!(body["sap"], "ok");
+}
+
+#[test]
+#[ignore]
+fn api_requires_token_when_key_set() {
+    // 启动带 SAP_API_KEY 的 server：/api/* 应要求 Bearer token，探针免鉴权。
+    let _s = start_server_with_env(&[("SAP_API_KEY", "test-secret")]);
+    let client = http_client();
+
+    // 1. /api/* 无 token → 401（认证层拦截，不触达 SAP）
+    let resp = client
+        .get(format!("{}/api/functions/STFC_CONNECTION", _s.base_url))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 401, "设了 key 后 /api 无 token 应 401");
+
+    // 2. /api/* 带正确 token → 200（放行后触达 SAP 拉元数据）
+    let resp = client
+        .get(format!("{}/api/functions/STFC_CONNECTION", _s.base_url))
+        .bearer_auth("test-secret")
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 200, "正确 Bearer token 应放行");
+
+    // 3. 探针始终免鉴权（编排系统探针不便带 token）
+    let h = client
+        .get(format!("{}/health", _s.base_url))
+        .send()
+        .unwrap();
+    assert_eq!(h.status(), 200, "/health 始终免鉴权");
+    let r = client.get(format!("{}/ready", _s.base_url)).send().unwrap();
+    assert_eq!(r.status(), 200, "/ready 始终免鉴权");
 }
 
 #[test]

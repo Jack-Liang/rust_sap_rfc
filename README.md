@@ -196,13 +196,41 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 
 ## 3. API 参考
 
-### 3.1 `GET /health`
+### 认证（可选）
 
-健康检查，**不触碰 SAP**，用于探活。
+设置环境变量 `SAP_API_KEY` 后，所有 `/api/*` 业务端点要求请求头 `Authorization: Bearer <token>`；未设置则免鉴权（本机默认）。探针 `/health`、`/ready` 与公开页 `/`、`/agents.md` 始终免鉴权。
+
+```bash
+# 启用认证（生成一个长随机串）
+export SAP_API_KEY=$(openssl rand -hex 32)
+
+# 调用时带 token
+curl -H "Authorization: Bearer $SAP_API_KEY" \
+  http://127.0.0.1:3000/api/functions/BAPI_USER_GETLIST
+```
+
+> ⚠️ 一旦把服务暴露到网络（`SAP_LISTEN_ADDR=0.0.0.0` 或 Docker 部署），**务必**设置 `SAP_API_KEY`。否则任何能访问端口的人都能以 `SAP_USER` 的权限调用任意 RFC。失败返回 `401 {"code":401,"message":"..."}` + `WWW-Authenticate: Bearer`。
+
+### 3.1 健康检查与就绪探针
+
+提供两个语义不同的探针端点：
+
+#### `GET /health` —— liveness（进程存活）
+
+不触碰 SAP，秒回，用于判断进程是否存活。
 
 ```json
 { "status": "ok" }
 ```
+
+#### `GET /ready` —— readiness（SAP 可达）
+
+借连接池调用 SAP 标准函数 `RFC_PING`（带 5s 超时）验证后端可达。
+
+- 成功：`200 { "status": "ready", "sap": "ok" }`
+- SAP 不可达 / 超时：`503 { "status": "unavailable" | "timeout", ... }`
+
+编排系统（K8s 等）建议：`/health` 作 livenessProbe（进程挂了才重启），`/ready` 作 readinessProbe（连不上 SAP 仅摘流等待恢复）。
 
 ---
 

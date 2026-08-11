@@ -53,13 +53,20 @@ pub fn static_app<S: Clone + Send + Sync + 'static>() -> Router<S> {
 
 /// 构建带共享连接池的 Router（静态路由 + SAP 业务路由）
 pub fn app(pool: SharedPool) -> Router {
-    static_app()
+    // 受认证保护的 /api 业务路由：设置 SAP_API_KEY 后要求 Bearer token
+    let api = Router::new()
         .route("/api/rfc", post(invoke_handler))
         .route("/api/functions/search", post(search_functions_handler))
         .route("/api/functions/:name", axum::routing::get(function_interface_handler))
         .route("/api/functions/:name/doc", axum::routing::get(function_doc_handler))
         .route("/api/ddic/type/:name", axum::routing::get(ddic_type_handler))
         .route("/api/ddic/field/:table/:field", axum::routing::get(ddic_field_handler))
+        .layer(axum::middleware::from_fn(crate::auth::require_api_key));
+
+    // 探针与公开页免鉴权：编排系统探针不便带 token，且无业务数据泄露
+    static_app()
+        .route("/ready", axum::routing::get(ready_handler))
+        .merge(api)
         .with_state(pool)
 }
 
@@ -90,9 +97,51 @@ pub async fn run(
         .await
 }
 
-/// GET /health —— 不触碰 SAP，便于外部探活
+/// GET /health —— 不触碰 SAP，便于外部探活（liveness）
 async fn health_handler() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// `GET /ready` —— readiness 探针：借连接池调 `RFC_PING` 验证 SAP 可达（带 5s 超时）。
+///
+/// 与 `/health`（liveness）分离：进程活着但连不上 SAP 时返回 503，编排系统
+/// 据此摘流而非重启。失败统一用 503——语义最贴合 readiness（"暂时不可用，
+/// 别给我流量"），故不走 `RfcError::IntoResponse` 的 502/504 映射。
+///
+/// 超时后 `spawn_blocking` 内的 ping 仍会跑完（无法取消），但 ping 本身很快；
+/// 最坏占用一个连接几秒，探针频率（默认 10s）下可接受。
+async fn ready_handler(
+    axum::extract::State(pool): axum::extract::State<SharedPool>,
+) -> (
+    axum::http::StatusCode,
+    Json<serde_json::Value>,
+) {
+    const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    let ping =
+        tokio::time::timeout(READY_TIMEOUT, run_blocking(pool, |conn| conn.ping())).await;
+
+    match ping {
+        Ok(Ok(())) => (
+            axum::http::StatusCode::OK,
+            Json(serde_json::json!({ "status": "ready", "sap": "ok" })),
+        ),
+        Ok(Err(e)) => (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "unavailable",
+                "code": e.code,
+                "message": e.message,
+            })),
+        ),
+        Err(_elapsed) => (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "timeout",
+                "timeout_ms": READY_TIMEOUT.as_millis() as u64,
+            })),
+        ),
+    }
 }
 
 /// GET /agents.md —— 返回嵌入的 AGENTS.md（供 AI/Agent 读取）

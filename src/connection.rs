@@ -166,6 +166,15 @@ impl RfcConnection {
             Ok(type_handle)
         }
     }
+
+    /// 轻量自检：调用无参标准函数 `RFC_PING`，验证连接对 SAP 仍可达。
+    /// 供 readiness 探针（`GET /ready`）使用——无参数读写，开销远小于业务调用。
+    /// 失败时若属通信类错误，连接池会自动丢弃该连接并重建。
+    pub fn ping(&self) -> Result<(), RfcError> {
+        let mut f = self.get_function("RFC_PING")?;
+        f.invoke()?;
+        Ok(())
+    }
 }
 
 /// 单个参数的元数据（Rust 化后的 RFC_PARAMETER_DESC 子集）
