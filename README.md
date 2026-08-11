@@ -187,6 +187,7 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 | `SAP_LISTEN_ADDR` | ❌ | `127.0.0.1:3000` | HTTP 服务监听地址 |
 | `SAP_POOL_SIZE` | ❌ | `8` | SAP 连接池上限（并发调用数），≥1 |
 | `SAP_REQUEST_TIMEOUT_SECS` | ❌ | `60` | 单次 SAP 调用全局超时（秒），≥1；超时返回 504。`/api/rfc` 可用请求体 `timeout_secs` per-request 覆盖 |
+| `SAP_RATE_LIMIT_RPS` | ❌ | _(不限流)_ | `/api` 按调用方 IP 的每秒请求数，≥1 启用；超限返回 429 |
 | `SAP_ROLE` | ❌ | `client` | 运行模式：`client`/`server`/`both`（server 模式见 [§9](#9-server-端模式被-sap-调用)） |
 | `SAP_SDK_DIR` | ❌ | `./nwrfcsdk` | SDK 根目录（Docker/CI/自定义路径用） |
 
@@ -232,6 +233,16 @@ curl -H "Authorization: Bearer $SAP_API_KEY" \
 - SAP 不可达 / 超时：`503 { "status": "unavailable" | "timeout", ... }`
 
 编排系统（K8s 等）建议：`/health` 作 livenessProbe（进程挂了才重启），`/ready` 作 readinessProbe（连不上 SAP 仅摘流等待恢复）。
+
+#### `GET /metrics` —— Prometheus 指标（免鉴权）
+
+返回 Prometheus 文本格式指标，供 Prometheus / Grafana 等采集系统抓取：
+
+- `pool_idle` / `pool_total` / `pool_max` —— 连接池空闲 / 已建总数 / 上限
+- `rfc_calls_total{func,result}` —— RFC 调用计数（按 函数 × 成功/失败）
+- `rfc_call_duration_ms{func}` —— 调用耗时直方图（含 p50/p90/p99）
+
+> 免鉴权（运维探针，与 `/health` `/ready` 同类）。若公网部署，需在反向代理层保护。
 
 ---
 
@@ -459,37 +470,45 @@ console.log(await r.json());
 
 ### 6.1 HTTP 状态码
 
-服务端按 SAP 错误码（`RFC_RC`）映射 HTTP 状态码，让调用方能按状态码区分「调用方错误」(4xx) 与「上游错误」(5xx)：
+服务端按错误来源映射 HTTP 状态码，让调用方能按状态码区分「调用方错误」(4xx) 与「上游错误」(5xx)：
 
-| 状态码 | 触发场景 | 对应 SAP RC |
+| 状态码 | 触发场景 | 来源 |
 |---|---|---|
-| `200 OK` | 调用成功 | `RFC_OK` (0) |
-| `400 Bad Request` | 请求 JSON 不合法（axum 自动）；ABAP 消息/异常；参数无效/转换失败 | `RFC_ABAP_MESSAGE` (4), `RFC_ABAP_EXCEPTION` (5), `RFC_INVALID_PARAMETER` (20), `RFC_CONVERSION_FAILURE` (23) |
-| `403 Forbidden` | SAP 授权检查失败 | `RFC_AUTHORIZATION_FAILURE` (25) |
-| `404 Not Found` | 函数模块/结构定义不存在 | `RFC_NOT_FOUND` (17) |
-| `500 Internal Server Error` | ABAP 运行时失败、内存不足、未知错误 | `RFC_ABAP_RUNTIME_FAILURE` (3), `RFC_MEMORY_INSUFFICIENT` (11) 等 |
-| `502 Bad Gateway` | 通信失败、连接被对端关闭 | `RFC_COMMUNICATION_FAILURE` (1), `RFC_CLOSED` (6) |
-| `504 Gateway Timeout` | SAP 侧超时 | `RFC_TIMEOUT` (9) |
+| `200 OK` | 调用成功；搜索无匹配（`count:0`） | `RFC_OK` (0) |
+| `400 Bad Request` | 请求 JSON 不合法；ABAP 消息/异常；参数无效/转换失败；空 pattern | SAP 4/5/20/23；网关 `PATTERN_EMPTY` |
+| `401 Unauthorized` | 未带 / 错 token（设了 `SAP_API_KEY` 时） | 网关认证层 `AUTH_INVALID` |
+| `403 Forbidden` | SAP 授权检查失败 | SAP 25 |
+| `404 Not Found` | 函数 / DDIC 不存在；路由不存在 | SAP 17，或 SAP 5 + key `FU_NOT_FOUND`/`NOT_FOUND`；网关 `ROUTE_NOT_FOUND` |
+| `405 Method Not Allowed` | 方法不匹配（如 POST 到 GET 端点） | 网关路由层 `METHOD_NOT_ALLOWED` |
+| `422 Unprocessable Entity` | 请求体缺必填字段 | axum 反序列化 `JSON_INVALID` |
+| `429 Too Many Requests` | 限流超限（`SAP_RATE_LIMIT_RPS`） | 网关限流层 `RATE_LIMITED` |
+| `500 Internal Server Error` | ABAP 运行时失败、内存不足、未知 | SAP 3/11 等 |
+| `502 Bad Gateway` | 通信失败、连接被对端关闭 | SAP 1/6 |
+| `504 Gateway Timeout` | SAP 侧超时；网关全局 / per-request 超时 | SAP 9；网关超时 |
 
 ### 6.2 错误响应体
+
+所有错误统一为：
 
 ```json
 {
   "error": {
-    "code": 5,
-    "key": "RFC_ABAP_EXCEPTION",
-    "message": "Function module BAPI_FOO_BAR does not exist..."
+    "code": 404,
+    "key": "FU_NOT_FOUND",
+    "message": "..."
   }
 }
 ```
 
 | 字段 | 含义 |
 |---|---|
-| `code` | SAP NWRFC 返回码（数字）。常见：`1`=通信失败，`3`=ABAP 运行时失败，`5`=ABAP 异常，`17`=未找到，`23`=类型转换失败，`25`=授权失败 |
-| `key` | SDK 错误 key 字符串，便于精确分类 |
-| `message` | 人类可读错误描述 |
+| `code` | **HTTP 状态码**（同响应状态行；调用方按此做粗粒度分流）。注意：不是 SAP 内部 RC |
+| `key` | 机器码：SAP 错误 key（如 `FU_NOT_FOUND`、`RFC_COMMUNICATION_FAILURE`）或网关 key（`AUTH_INVALID` / `JSON_INVALID` / `RATE_LIMITED` / `METHOD_NOT_ALLOWED` / `ROUTE_NOT_FOUND` / `PATTERN_EMPTY`） |
+| `message` | 人读描述（可能含 SAP 原始消息文本） |
 
-> 💡 HTTP 状态码已按 `code` 派生（见上表），调用方既可按状态码做粗粒度处理，也可用 `code` 做精细分支。
+> 💡 `code` = HTTP 状态码（SAP 内部 RC 不暴露给调用方）。按 `code` 做粗粒度处理，按 `key` 做精细分支。
+
+**特例：搜索无匹配不是错误。** `POST /api/functions/search` 无结果时返回 `200 {"count":0,"functions":[]}`，不报错。
 
 ### 6.3 错误排查思路
 
