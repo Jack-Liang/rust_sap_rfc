@@ -25,6 +25,11 @@ fn configured_key() -> Option<&'static str> {
     CONFIGURED_KEY.get().and_then(|opt| opt.as_deref())
 }
 
+/// 是否启用了 API 认证（设置了 `SAP_API_KEY`）。供首页等处展示认证状态。
+pub fn is_enabled() -> bool {
+    configured_key().is_some()
+}
+
 /// 从 `Authorization` 头值中提取 Bearer token。
 /// scheme `Bearer` 大小写不敏感（RFC 7235）；token 前导空白被裁掉。
 /// 返回 `None` 表示格式不符合 Bearer 方案（包括空 token）。
@@ -83,8 +88,11 @@ pub async fn require_api_key(req: axum::extract::Request, next: axum::middleware
 /// 构造 401 响应：带 `WWW-Authenticate: Bearer`，body 格式与 `RfcError` 对齐。
 fn unauthorized() -> Response {
     let body = axum::Json(serde_json::json!({
-        "code": 401,
-        "message": "Missing or invalid Authorization header (expected 'Bearer <token>')",
+        "error": {
+            "code": 401,
+            "message": "Missing or invalid Authorization header (expected 'Bearer <token>')",
+            "key": "AUTH_INVALID"
+        }
     }));
     let mut resp = (StatusCode::UNAUTHORIZED, body).into_response();
     resp.headers_mut().insert(

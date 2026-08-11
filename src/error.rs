@@ -45,7 +45,8 @@ pub struct ErrorResponse {
 
 #[derive(Serialize)]
 pub struct ErrorBody {
-    pub code: i32,
+    /// HTTP 状态码（统一契约：客户端按此码判断，不再暴露 SAP 内部 code）
+    pub code: u16,
     pub key: String,
     pub message: String,
 }
@@ -54,7 +55,7 @@ impl IntoResponse for RfcError {
     fn into_response(self) -> Response {
         let body = ErrorResponse {
             error: ErrorBody {
-                code: self.code,
+                code: self.status,
                 key: self.key,
                 message: self.message,
             },
@@ -71,10 +72,30 @@ impl IntoResponse for RfcError {
 ///   函数未找到(17)→404；授权失败(25)→403
 /// - 5xx（服务端/上游错误）：通信失败(1)、连接关闭(6)→502；
 ///   运行时失败(3)、内存不足(11)→500；超时(9)→504
-fn status_for_rc(rc: RFC_RC) -> u16 {
+/// SAP "未找到"类 key（函数/DDIC 定义不存在）。
+/// code 5(ABAP_EXCEPTION) 配这些 key → 404；其余 code 5 → 400。
+fn is_not_found_key(key: &str) -> bool {
+    matches!(key, "FU_NOT_FOUND" | "NOT_FOUND")
+}
+
+/// 把 SAP RFC_RC 错误码 + key 映射成 HTTP 状态码。
+///
+/// 映射依据 sapnwrfc.h 的 _RFC_RC 枚举顺序（从 0 开始）：
+/// - 4xx（调用方错误）：ABAP 异常/消息(4,5)→400；但函数/DDIC 不存在(key FU_NOT_FOUND/NOT_FOUND)→404；
+///   参数无效/转换失败(20,23)→400；授权失败(25)→403
+/// - 5xx（服务端/上游错误）：通信失败(1)、连接关闭(6)→502；
+///   运行时失败(3)、内存不足(11)→500；超时(9)→504
+fn status_for_rc(rc: RFC_RC, key: &str) -> u16 {
     match rc {
         // 4xx：调用方导致的错误（改请求可恢复）
-        4 | 5 => 400,           // RFC_ABAP_MESSAGE / RFC_ABAP_EXCEPTION
+        4 | 5 => {
+            // ABAP_MESSAGE / ABAP_EXCEPTION：按 key 区分"未找到"→404，其余→400
+            if is_not_found_key(key) {
+                404
+            } else {
+                400
+            }
+        }
         17 => 404,              // RFC_NOT_FOUND（函数/结构定义不存在）
         20 | 23 => 400,         // RFC_INVALID_PARAMETER / RFC_CONVERSION_FAILURE
         25 => 403,              // RFC_AUTHORIZATION_FAILURE
@@ -91,11 +112,13 @@ pub fn check_rc(rc: RFC_RC, error_info: &RFC_ERROR_INFO) -> Result<(), RfcError>
         if rc == RFC_OK {
             Ok(())
         } else {
+            let key = sap_uc_to_string(error_info.key.as_ptr(), 64);
+            let message = sap_uc_to_string(error_info.message.as_ptr(), 256);
             Err(RfcError {
                 code: rc,
-                message: sap_uc_to_string(error_info.message.as_ptr(), 256),
-                key: sap_uc_to_string(error_info.key.as_ptr(), 64),
-                status: status_for_rc(rc),
+                message,
+                key: key.clone(),
+                status: status_for_rc(rc, &key),
             })
         }
     }
@@ -136,17 +159,27 @@ mod tests {
 
     #[test]
     fn status_mapping_for_known_rc() {
-        assert_eq!(status_for_rc(4), 400); // ABAP_MESSAGE
-        assert_eq!(status_for_rc(5), 400); // ABAP_EXCEPTION
-        assert_eq!(status_for_rc(17), 404); // NOT_FOUND
-        assert_eq!(status_for_rc(20), 400); // INVALID_PARAMETER
-        assert_eq!(status_for_rc(23), 400); // CONVERSION_FAILURE
-        assert_eq!(status_for_rc(25), 403); // AUTHORIZATION_FAILURE
-        assert_eq!(status_for_rc(1), 502); // COMMUNICATION_FAILURE
-        assert_eq!(status_for_rc(6), 502); // CLOSED
-        assert_eq!(status_for_rc(9), 504); // TIMEOUT
-        assert_eq!(status_for_rc(3), 500); // ABAP_RUNTIME_FAILURE
-        assert_eq!(status_for_rc(99), 500); // 未知码
+        assert_eq!(status_for_rc(4, ""), 400); // ABAP_MESSAGE
+        assert_eq!(status_for_rc(5, ""), 400); // ABAP_EXCEPTION，非 NOT_FOUND key
+        assert_eq!(status_for_rc(5, "FU_NOT_FOUND"), 404); // 函数不存在
+        assert_eq!(status_for_rc(5, "NOT_FOUND"), 404); // DDIC 不存在
+        assert_eq!(status_for_rc(17, ""), 404); // NOT_FOUND
+        assert_eq!(status_for_rc(20, ""), 400); // INVALID_PARAMETER
+        assert_eq!(status_for_rc(23, ""), 400); // CONVERSION_FAILURE
+        assert_eq!(status_for_rc(25, ""), 403); // AUTHORIZATION_FAILURE
+        assert_eq!(status_for_rc(1, ""), 502); // COMMUNICATION_FAILURE
+        assert_eq!(status_for_rc(6, ""), 502); // CLOSED
+        assert_eq!(status_for_rc(9, ""), 504); // TIMEOUT
+        assert_eq!(status_for_rc(3, ""), 500); // ABAP_RUNTIME_FAILURE
+        assert_eq!(status_for_rc(99, ""), 500); // 未知码
+    }
+
+    #[test]
+    fn is_not_found_key_recognizes_known_keys() {
+        assert!(is_not_found_key("FU_NOT_FOUND"));
+        assert!(is_not_found_key("NOT_FOUND"));
+        assert!(!is_not_found_key(""));
+        assert!(!is_not_found_key("OTHER_ERROR"));
     }
 
     #[test]
@@ -187,7 +220,7 @@ mod tests {
         // rc=22 (RFC_CLOSED 在某些 SDK 版本) 不在 status_for_rc 的显式分支里，
         // 但它在 RECONNECT_RC（pool 触发重连）。锁住其 HTTP 语义：走 _=>500。
         // 注：标准 RFC_CLOSED=7（已测），这里测 22 确保不变。
-        assert_eq!(status_for_rc(22), 500);
+        assert_eq!(status_for_rc(22, ""), 500);
     }
 
     #[test]

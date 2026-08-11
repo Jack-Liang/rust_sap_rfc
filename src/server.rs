@@ -110,7 +110,16 @@ pub fn app(pool: SharedPool) -> Router {
     static_app()
         .route("/ready", axum::routing::get(ready_handler))
         .merge(api)
+        .fallback(fallback_handler)
         .with_state(pool)
+}
+
+/// 兜底 404：路由不存在时统一返回 JSON 错误体（而非 axum 默认的空 body）。
+async fn fallback_handler() -> (axum::http::StatusCode, Json<serde_json::Value>) {
+    (
+        axum::http::StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error":{"code":404,"message":"Not found","key":"ROUTE_NOT_FOUND"}})),
+    )
 }
 
 /// 启动 HTTP 服务（阻塞当前异步任务直到服务器结束）。
@@ -210,9 +219,16 @@ async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::resp
     let base = format!("http://{host}");
     let agents_url = format!("{base}/agents.md");
 
+    // 认证状态：用于首页条件显示认证提示条
+    let auth_visibility = if crate::auth::is_enabled() {
+        "block"
+    } else {
+        "none"
+    };
     let html = include_str!("index.html")
         .replace("{{BASE_URL}}", &base)
-        .replace("{{AGENTS_URL}}", &agents_url);
+        .replace("{{AGENTS_URL}}", &agents_url)
+        .replace("{{AUTH_BANNER_VISIBILITY}}", auth_visibility);
     axum::response::Html(html)
 }
 
@@ -222,9 +238,16 @@ async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::resp
 /// FFI 与连接池内部状态都被限制在阻塞闭包中，绝不跨 await 点。
 async fn invoke_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
-    Json(req): Json<InvokeRequest>,
+    req: Result<Json<InvokeRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<InvokeResponse>, RfcError> {
     let started = std::time::Instant::now();
+    // JSON 解析/反序列化失败 → 统一错误格式（status 取 axum 语义码，body_text 作 message）
+    let Json(req) = req.map_err(|r| RfcError {
+        code: -1,
+        status: r.status().as_u16(),
+        message: r.body_text(),
+        key: "JSON_INVALID".into(),
+    })?;
     let func_name = req.func_name.clone();
 
     // per-request 超时：调用方可对慢接口自主放宽；不传/传 0 → 用全局默认
@@ -342,8 +365,23 @@ pub(crate) struct SearchRequest {
 /// ② POST /api/functions/search —— 搜索函数模块
 async fn search_functions_handler(
     axum::extract::State(pool): axum::extract::State<SharedPool>,
-    Json(req): Json<SearchRequest>,
+    req: Result<Json<SearchRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<SearchResponse>, RfcError> {
+    let Json(req) = req.map_err(|r| RfcError {
+        code: -1,
+        status: r.status().as_u16(),
+        message: r.body_text(),
+        key: "JSON_INVALID".into(),
+    })?;
+    // 空 pattern 校验：pattern + group 都空 → 拒绝（防无意义枚举全库）
+    if req.pattern.trim().is_empty() && req.group.trim().is_empty() {
+        return Err(RfcError {
+            code: -1,
+            status: 400,
+            message: "pattern 和 group 不能同时为空（至少提供一个过滤条件）".into(),
+            key: "PATTERN_EMPTY".into(),
+        });
+    }
     let max = req.max_results.unwrap_or(50).min(500);
     let pattern = req.pattern.clone();
     let functions = run_blocking(pool, move |conn| {
