@@ -359,6 +359,9 @@ pub struct ResolvedMeta {
     pub scalars: HashMap<String, (usize, i32)>,
     /// 表输出：表名 -> {字段名 -> (字符长度, RFCTYPE 类型值)}
     pub tables: HashMap<String, HashMap<String, (usize, i32)>>,
+    /// STRUCTURE 输出：结构体名 -> {字段名 -> (字符长度, RFCTYPE 类型值)}
+    /// 供 `string_outputs` 遇 STRUCTURE 时按子字段读取（类似 `struct_outputs`）
+    pub structures: HashMap<String, HashMap<String, (usize, i32)>>,
 }
 
 impl ResolvedMeta {
@@ -368,6 +371,7 @@ impl ResolvedMeta {
         Self {
             scalars: HashMap::new(),
             tables: HashMap::new(),
+            structures: HashMap::new(),
         }
     }
 }
@@ -452,18 +456,50 @@ where
     //    - int_outputs 显式声明 → 按整数读
     //    - string_outputs 显式声明 → 按字符串读（长度可指定或元数据发现）
     let mut scalars: HashMap<String, ScalarValue> = HashMap::new();
+    let mut structs: HashMap<String, HashMap<String, ScalarValue>> = HashMap::new();
 
     for name in &req.int_outputs {
         let v = func.get_int(name)?;
         scalars.insert(name.clone(), ScalarValue::Int(v));
     }
     for (name, max_len_spec) in &req.string_outputs {
-        let len = max_len_spec
-            .resolve()
-            .or_else(|| resolved.scalars.get(name).map(|(l, _)| *l))
-            .unwrap_or(DEFAULT_CHAR_LEN);
-        let v = func.get_chars(name, len)?;
-        scalars.insert(name.clone(), ScalarValue::Chars(v));
+        let type_ = resolved
+            .scalars
+            .get(name)
+            .map(|(_, t)| *t)
+            .unwrap_or(crate::ffi::RFCTYPE_CHAR);
+        if type_ == crate::ffi::rfctype::STRUCTURE {
+            // STRUCTURE：自动按子字段读（类似 struct_outputs），结果进 structs。
+            // 子字段列表已由 resolve_meta 预填 resolved.structures；无字段元数据则跳过（少见）。
+            if let Some(sub_fields) = resolved.structures.get(name).cloned() {
+                if let Ok(row) = func.get_structure(name) {
+                    let struct_metas = sub_fields;
+                    let mut m = HashMap::new();
+                    for (fname, (flen, ftype)) in struct_metas {
+                        let v = if ftype == crate::ffi::rfctype::INT1
+                            || ftype == crate::ffi::rfctype::INT2
+                        {
+                            row.get_int(fname.as_str()).map(ScalarValue::Int).unwrap_or_else(|_| {
+                                ScalarValue::Chars(String::new())
+                            })
+                        } else {
+                            row.get_chars(fname.as_str(), flen)
+                                .map(ScalarValue::Chars)
+                                .unwrap_or_else(|_| ScalarValue::Chars(String::new()))
+                        };
+                        m.insert(fname.clone(), v);
+                    }
+                    structs.insert(name.clone(), m);
+                }
+            }
+        } else {
+            let len = max_len_spec
+                .resolve()
+                .or_else(|| resolved.scalars.get(name).map(|(l, _)| *l))
+                .unwrap_or(DEFAULT_CHAR_LEN);
+            let v = func.get_chars(name, len)?;
+            scalars.insert(name.clone(), ScalarValue::Chars(v));
+        }
     }
     // auto_outputs：按元数据真实类型自动选 getter
     for name in &req.auto_outputs {
@@ -525,8 +561,8 @@ where
         tables.insert(table_name.clone(), out_rows);
     }
 
-    // 5b. 收集顶层结构体输出（同表输出的类型规则）
-    let mut structs: HashMap<String, HashMap<String, ScalarValue>> = HashMap::new();
+    // 5b. 收集顶层结构体输出（同表输出的类型规则）— `structs` 已在函数顶部声明（line ~459），
+    //     此处直接向其填充。
     for (struct_name, fields) in &req.struct_outputs {
         let mut row = match func.get_structure(struct_name) {
             Ok(r) => r,

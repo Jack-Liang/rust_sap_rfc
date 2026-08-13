@@ -45,5 +45,32 @@ fn resolve_meta(conn: &RfcConnection, req: &InvokeRequest) -> crate::api::Resolv
         tables.insert(table_name.clone(), field_map);
     }
 
-    crate::api::ResolvedMeta { scalars, tables }
+    // STRUCTURE 输出：结构体名 -> {字段名 -> (字符长度, 类型)}
+    // 供 string_outputs/auto_outputs 遇 STRUCTURE 时按子字段读；也供 struct_outputs 复用（与 table_outputs 同样用 table_field_metas）
+    let mut structures: HashMap<String, HashMap<String, (usize, i32)>> = HashMap::new();
+    // 收集需要预查 STRUCTURE 子字段的参数名（去重）
+    let mut need_struct_meta: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // struct_outputs 明示要的
+    for struct_name in req.struct_outputs.keys() {
+        // struct_outputs 之前也走 tables（见下句，兼容旧逻辑）；同时预查 structures（供 string_outputs/auto_outputs 用）
+        need_struct_meta.insert(struct_name.clone());
+    }
+    // string_outputs / auto_outputs 中类型为 STRUCTURE 的（避免重复查）
+    for name in req.string_outputs.keys().chain(req.auto_outputs.iter()) {
+        if let Some((_, t)) = scalars.get(name) {
+            if *t == crate::ffi::RFCTYPE_STRUCTURE {
+                need_struct_meta.insert(name.clone());
+            }
+        }
+    }
+    for struct_name in &need_struct_meta {
+        let field_map = crate::metadata::table_field_metas(conn, &req.func_name, struct_name)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, m)| (k, (m.char_length, m.type_)))
+            .collect();
+        structures.insert(struct_name.clone(), field_map);
+    }
+
+    crate::api::ResolvedMeta { scalars, tables, structures }
 }
