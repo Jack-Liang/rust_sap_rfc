@@ -299,3 +299,72 @@ fn text_lines_spec() -> Vec<FieldSpec> {
         },
     ]
 }
+
+/// 读函数模块的 ABAP 源代码（内部调 `RPY_FUNCTIONMODULE_READ`，源码在 `SOURCE` 表）。
+/// 返回源码行列表（每行一个字符串）。
+pub fn read_function_source(
+    conn: &RfcConnection,
+    func_name: &str,
+) -> Result<Vec<String>, RfcError> {
+    let req = InvokeRequest {
+        func_name: "RPY_FUNCTIONMODULE_READ".to_string(),
+        inputs: HashMap::from([(
+            "FUNCTIONNAME".to_string(),
+            ScalarValue::Chars(func_name.to_uppercase()),
+        )]),
+        table_outputs: HashMap::from([("SOURCE".to_string(), source_line_spec())]),
+        ..Default::default()
+    };
+    let resp = execute_collect(conn, &req)?;
+    Ok(resp
+        .tables
+        .get("SOURCE")
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            row.get("LINE")
+                .map(|v| v.clone().into_chars())
+                .unwrap_or_default()
+        })
+        .collect())
+}
+
+/// 读 ABAP 程序源代码（内部调 `RPY_PROGRAM_READ`，源码在 `SOURCE_EXTENDED` 表）。
+/// 程序不存在时 SAP 返回错误（透传 → 404）；存在但无源码 → 空 Vec。
+pub fn read_program_source(
+    conn: &RfcConnection,
+    prog_name: &str,
+) -> Result<Vec<String>, RfcError> {
+    let req = InvokeRequest {
+        func_name: "RPY_PROGRAM_READ".to_string(),
+        inputs: HashMap::from([(
+            "PROGRAM_NAME".to_string(),
+            ScalarValue::Chars(prog_name.to_uppercase()),
+        )]),
+        table_outputs: HashMap::from([("SOURCE_EXTENDED".to_string(), source_line_spec())]),
+        ..Default::default()
+    };
+    let resp = execute_collect(conn, &req)?;
+    Ok(resp
+        .tables
+        .get("SOURCE_EXTENDED")
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            row.get("LINE")
+                .map(|v| v.clone().into_chars())
+                .unwrap_or_default()
+        })
+        .collect())
+}
+
+/// 源码行表字段规格（`LINE`: CHAR，源码一行）。
+fn source_line_spec() -> Vec<FieldSpec> {
+    vec![FieldSpec {
+        name: "LINE".to_string(),
+        max_len: Some(255),
+        auto: false,
+    }]
+}

@@ -134,6 +134,8 @@ pub fn app(pool: SharedPool) -> Router {
         .route("/api/functions/search", post(search_functions_handler))
         .route("/api/functions/:name", axum::routing::get(function_interface_handler))
         .route("/api/functions/:name/doc", axum::routing::get(function_doc_handler))
+        .route("/api/functions/:name/source", axum::routing::get(function_source_handler))
+        .route("/api/programs/:name/source", axum::routing::get(program_source_handler))
         .route("/api/ddic/type/:name", axum::routing::get(ddic_type_handler))
         .route("/api/ddic/field/:table/:field", axum::routing::get(ddic_field_handler))
         .layer(axum::middleware::from_fn(crate::auth::require_api_key))
@@ -636,6 +638,40 @@ async fn ddic_field_handler(
             })
             .collect(),
     }))
+}
+
+/// ⑥ `GET /api/functions/:name/source` —— 读函数 ABAP 源代码（调 `RPY_FUNCTIONMODULE_READ`）
+async fn function_source_handler(
+    axum::extract::State(pool): axum::extract::State<SharedPool>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, RfcError> {
+    crate::api::validate_func_name(&name)?;
+    let lookup = name.clone();
+    let lines = run_blocking(pool, move |conn| {
+        crate::discovery::read_function_source(conn, &lookup)
+    })
+    .await?;
+    let count = lines.len();
+    Ok(Json(
+        serde_json::json!({"name": name, "count": count, "lines": lines}),
+    ))
+}
+
+/// ⑦ `GET /api/programs/:name/source` —— 读 ABAP 程序源代码（调 `RPY_PROGRAM_READ`，含 include/报表）
+async fn program_source_handler(
+    axum::extract::State(pool): axum::extract::State<SharedPool>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, RfcError> {
+    crate::api::validate_func_name(&name)?;
+    let lookup = name.clone();
+    let lines = run_blocking(pool, move |conn| {
+        crate::discovery::read_program_source(conn, &lookup)
+    })
+    .await?;
+    let count = lines.len();
+    Ok(Json(
+        serde_json::json!({"name": name, "count": count, "lines": lines}),
+    ))
 }
 
 /// ⑤ GET /api/functions/:name/doc —— 查函数文档（短文本 + SE37 长文本 + 参数说明）

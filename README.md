@@ -308,13 +308,15 @@ curl -H "Authorization: Bearer $SAP_API_KEY" \
 
 ### 3.3 面向 AI 的元数据 API
 
-5 个端点让 AI/Agent 自服务地发现函数、理解参数、查数据字典、读文档。典型工作流：**搜索 → 查接口 → 查文档 → 调用**。给 AI 的完整操作指南见 [`AGENTS.md`](./AGENTS.md)。
+5 个端点让 AI/Agent 自服务地发现函数、理解参数、查数据字典、读文档、看源码。典型工作流：**搜索 → 查接口 → 查文档 → 看源码 → 调用**。给 AI 的完整操作指南见 [`AGENTS.md`](./AGENTS.md)。
 
 | 端点 | 用途 | 示例 |
 |------|------|------|
 | `POST /api/functions/search` | 按通配符搜索函数 | `{"pattern":"BAPI_USER_*","max_results":10}` |
 | `GET /api/functions/:name` | 查函数完整接口（参数/类型/方向/嵌套字段） | `/api/functions/BAPI_USER_GET_DETAIL` |
 | `GET /api/functions/:name/doc` | 查文档（短文本+SE37长文档+参数说明） | `/api/functions/BAPI_USER_GET_DETAIL/doc?lang=EN` |
+| `GET /api/functions/:name/source` | 读函数 ABAP 源码（怎么实现的） | `/api/functions/STFC_CONNECTION/source` |
+| `GET /api/programs/:name/source` | 读程序/报表/include 源码 | `/api/programs/RSBDCOS0/source` |
 | `GET /api/ddic/type/:name` | 查 DDIC 结构/表字段定义 | `/api/ddic/type/BAPIRET2` |
 | `GET /api/ddic/field/:table/:field` | 查字段语义（数据元素/域/固定值） | `/api/ddic/field/BAPIRET2/TYPE` |
 
