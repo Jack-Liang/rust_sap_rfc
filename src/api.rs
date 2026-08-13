@@ -699,9 +699,9 @@ pub struct FieldDef {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub description: String,
     /// 嵌套结构体/表的子字段（仅 STRUCTURE/TABLE 且有展开时出现）。
-    /// 用 Box<FieldDef> 表达递归类型（Rust 要求递归类型必须 Box 化）。
+    /// Vec 自带堆分配，已打破递归（无需 Box）。
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fields: Option<Vec<Box<FieldDef>>>,
+    pub fields: Option<Vec<FieldDef>>,
 }
 
 /// RFC_DIRECTION 位掩码为 0（字段无方向）时不输出 decimals 的判断函数
@@ -719,7 +719,7 @@ impl FieldDef {
             decimals: f.decimals,
             description: f.description.clone(),
             fields: f.sub_fields.as_ref().map(|subs| {
-                subs.iter().map(|s| Box::new(FieldDef::from_type_field(s))).collect()
+                subs.iter().map(FieldDef::from_type_field).collect()
             }),
         }
     }
@@ -741,9 +741,9 @@ pub struct FunctionParam {
     pub default: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub description: String,
-    /// 嵌套结构体/表子字段（用 Box<FieldDef> 表达递归）
+    /// 嵌套结构体/表子字段（Vec 自带堆分配，打破递归）
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fields: Option<Vec<Box<FieldDef>>>,
+    pub fields: Option<Vec<FieldDef>>,
 }
 
 #[derive(Debug, Serialize)]

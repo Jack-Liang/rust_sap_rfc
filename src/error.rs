@@ -65,15 +65,8 @@ impl IntoResponse for RfcError {
     }
 }
 
-/// 把 SAP RFC_RC 错误码映射成 HTTP 状态码。
-///
-/// 映射依据 sapnwrfc.h 的 _RFC_RC 枚举顺序（从 0 开始）：
-/// - 4xx（调用方错误）：ABAP 异常/消息(4,5)→400；参数无效/转换失败(20,23)→400；
-///   函数未找到(17)→404；授权失败(25)→403
-/// - 5xx（服务端/上游错误）：通信失败(1)、连接关闭(6)→502；
-///   运行时失败(3)、内存不足(11)→500；超时(9)→504
 /// SAP "未找到"类 key（函数/DDIC 定义不存在）。
-/// code 5(ABAP_EXCEPTION) 配这些 key → 404；其余 code 5 → 400。
+/// `code 5`(ABAP_EXCEPTION) 配这些 key → 404；其余 code 5 → 400。
 fn is_not_found_key(key: &str) -> bool {
     matches!(key, "FU_NOT_FOUND" | "NOT_FOUND")
 }

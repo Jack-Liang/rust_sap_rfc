@@ -1,6 +1,7 @@
 [package]
 name = "rust_sap_rfc_demo"
-version = "0.4.2"
+version = "0.4.3"
+license = "MIT"
 edition = "2021"
 
 # package 名保留历史值（避免改动 Cargo.lock 的依赖树），

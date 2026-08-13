@@ -47,9 +47,9 @@ jobs:
           cc -shared -o "$STUB/libsapnwrfc.so" /tmp/stub.o
           ls -la "$STUB"
 
-      # clippy：报告 lint（暂不 -D warnings，遗留 warning 待后续清理；加 -D 前先把代码清干净）
+      # clippy：质量门禁（-D warnings 阻断；代码已清干净）
       - name: Clippy
-        run: cargo clippy --all-targets
+        run: cargo clippy --all-targets -- -D warnings
 
       # 单测门禁：默认跳过 #[ignore] 的 SAP 集成测试
       - name: Test

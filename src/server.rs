@@ -464,16 +464,15 @@ fn default_lang() -> String {
 fn param_info_to_field_def(
     p: &crate::connection::ParamInfo,
 ) -> Result<FieldDef, RfcError> {
-    let fields = if (p.type_ == crate::ffi::RFCTYPE_TABLE
-        || p.type_ == crate::ffi::RFCTYPE_STRUCTURE)
-        && p.type_desc_handle.is_some()
+    let fields = if p.type_ == crate::ffi::RFCTYPE_TABLE
+        || p.type_ == crate::ffi::RFCTYPE_STRUCTURE
     {
-        // SAFETY: type_desc_handle 来自刚拉取的有效元数据，连接仍有效
-        let subs = unsafe { get_field_infos(p.type_desc_handle.unwrap()) }?;
-        let defs: Vec<Box<FieldDef>> = subs
-            .iter()
-            .map(|sf| {
-                Box::new(FieldDef {
+        if let Some(handle) = p.type_desc_handle {
+            // SAFETY: handle 来自刚拉取的有效元数据，连接仍有效
+            let subs = unsafe { get_field_infos(handle) }?;
+            let defs: Vec<FieldDef> = subs
+                .iter()
+                .map(|sf| FieldDef {
                     name: sf.name.clone(),
                     type_name: rfctype_name(sf.type_),
                     length: sf.char_length,
@@ -481,9 +480,11 @@ fn param_info_to_field_def(
                     description: sf.parameter_text.clone(),
                     fields: None, // 深度递归由 metadata 缓存负责；此处仅展开一层供 AI 快速预览
                 })
-            })
-            .collect::<Vec<_>>();
-        Some(defs)
+                .collect::<Vec<_>>();
+            Some(defs)
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -714,8 +715,10 @@ mod tests {
 
     #[test]
     fn summarize_params_redacts_and_structures() {
-        let mut req = InvokeRequest::default();
-        req.func_name = "STFC_CONNECTION".into();
+        let mut req = InvokeRequest {
+            func_name: "STFC_CONNECTION".into(),
+            ..Default::default()
+        };
         req.inputs
             .insert("REQUTEXT".into(), ScalarValue::Chars("hi".into()));
         req.inputs
