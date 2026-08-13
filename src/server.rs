@@ -52,10 +52,16 @@ static METRICS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 
 /// 启动期初始化 Prometheus 指标记录器（main 调一次）。之后 `counter!`/`gauge!`/`histogram!` 才生效。
 pub fn init_metrics() {
-    let handle = PrometheusBuilder::new()
-        .install_recorder()
-        .expect("安装 Prometheus 指标记录器失败");
-    let _ = METRICS_HANDLE.set(handle);
+    // 降级：指标安装失败不拖垮主服务（log warn + /metrics 返回空，不影响业务）
+    match PrometheusBuilder::new().install_recorder() {
+        Ok(handle) => {
+            let _ = METRICS_HANDLE.set(handle);
+        }
+        Err(e) => tracing::warn!(
+            error = %e,
+            "Prometheus 指标记录器安装失败，/metrics 将返回空（不影响主功能）"
+        ),
+    }
 }
 
 /// 按 IP 限流器（启动期由 [`init_rate_limiter`] 写入；`None` = 不限流）。
@@ -64,9 +70,10 @@ static RATE_LIMITER: OnceLock<Option<IpLimiter>> = OnceLock::new();
 
 /// 启动期设置限流：`rps=None` 或 0 → 不限流；≥1 → 按 IP 每秒 rps 个请求。
 pub fn init_rate_limiter(rps: Option<u32>) {
-    let limiter = rps
-        .filter(|&r| r >= 1)
-        .map(|r| RateLimiter::keyed(Quota::per_second(NonZeroU32::new(r).expect("rps≥1"))));
+    // NonZeroU32::new(r) 对 r=0 返 None（= 不启用），不会 panic
+    let limiter = rps.and_then(|r| {
+        NonZeroU32::new(r).map(|n| RateLimiter::keyed(Quota::per_second(n)))
+    });
     let _ = RATE_LIMITER.set(limiter);
 }
 
