@@ -368,3 +368,104 @@ fn source_line_spec() -> Vec<FieldSpec> {
         auto: false,
     }]
 }
+
+/// 读 SAP 透明表数据（内部调 `RFC_READ_TABLE`，用 `ET_DATA` 返回避免 512 截断）。
+///
+/// - `table`: 表名（如 `T000`、`USR01`）
+/// - `fields`: 要查的字段名（**必须非空**，决定返回列顺序 + 字段名映射）
+/// - `where_clauses`: WHERE 条件（ABAP Open SQL 片段，每段一行；空 = 无过滤）
+/// - `rowcount`: 最多返回行数（防全表）
+/// - `delimiter`: 字段分隔符（解析 `ET_DATA.LINE` 用；建议罕见字符如 `\u0001` 避免值冲突）
+///
+/// 返回行列表，每行是 `{字段名: 值}`（按 `fields` 顺序对齐）。
+///
+/// > 安全：`where_clauses` 是 ABAP SQL 片段，调用方可传任意 WHERE——
+/// > 读权限边界靠 SAP 侧（账号 `S_TABU_DIS` 表权限，见 `docs/SAP_PERMISSIONS.md`）。
+pub fn read_table(
+    conn: &RfcConnection,
+    table: &str,
+    fields: &[String],
+    where_clauses: &[String],
+    rowcount: u32,
+    delimiter: char,
+) -> Result<Vec<HashMap<String, String>>, RfcError> {
+    let inputs = HashMap::from([
+        (
+            "QUERY_TABLE".to_string(),
+            ScalarValue::Chars(table.to_uppercase()),
+        ),
+        (
+            "DELIMITER".to_string(),
+            ScalarValue::Chars(delimiter.to_string()),
+        ),
+        ("ROWCOUNT".to_string(), ScalarValue::Int(rowcount as i32)),
+        // 用 ET_DATA（STRING，无 512 截断）而非传统 DATA（CHAR 512）
+        (
+            "USE_ET_DATA_4_RETURN".to_string(),
+            ScalarValue::Chars("X".to_string()),
+        ),
+    ]);
+    let mut table_inputs = HashMap::new();
+    // FIELDS：字段过滤（每行 FIELDNAME）
+    table_inputs.insert(
+        "FIELDS".to_string(),
+        fields
+            .iter()
+            .map(|f| {
+                HashMap::from([(
+                    "FIELDNAME".to_string(),
+                    ScalarValue::Chars(f.to_uppercase()),
+                )])
+            })
+            .collect::<Vec<_>>(),
+    );
+    // OPTIONS：WHERE 条件（每行 TEXT）
+    if !where_clauses.is_empty() {
+        table_inputs.insert(
+            "OPTIONS".to_string(),
+            where_clauses
+                .iter()
+                .map(|w| HashMap::from([("TEXT".to_string(), ScalarValue::Chars(w.clone()))]))
+                .collect::<Vec<_>>(),
+        );
+    }
+    let req = InvokeRequest {
+        func_name: "RFC_READ_TABLE".to_string(),
+        inputs,
+        table_inputs,
+        table_outputs: HashMap::from([(
+            "ET_DATA".to_string(),
+            vec![FieldSpec {
+                name: "LINE".to_string(),
+                max_len: Some(1000),
+                auto: false,
+            }],
+        )]),
+        ..Default::default()
+    };
+    let resp = execute_collect(conn, &req)?;
+    // 解析 ET_DATA.LINE：按 delimiter 分隔 → 按 fields 顺序映射成 {字段名: 值}
+    let rows = resp
+        .tables
+        .get("ET_DATA")
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            let line = row
+                .get("LINE")
+                .map(|v| v.clone().into_chars())
+                .unwrap_or_default();
+            let values: Vec<&str> = line.split(delimiter).collect();
+            let mut m = HashMap::new();
+            for (i, f) in fields.iter().enumerate() {
+                m.insert(
+                    f.clone(),
+                    values.get(i).map(|s| s.to_string()).unwrap_or_default(),
+                );
+            }
+            m
+        })
+        .collect();
+    Ok(rows)
+}

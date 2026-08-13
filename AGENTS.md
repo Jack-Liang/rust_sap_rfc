@@ -34,6 +34,7 @@ curl -H "Authorization: Bearer <SAP_API_KEY>" http://127.0.0.1:3000/api/function
 | 想理解某个字段的含义、合法取值 | `GET /api/ddic/field/{table}/{field}` |
 | 想看函数的 ABAP 源码（怎么实现的） | `GET /api/functions/{name}/source` |
 | 想看程序/报表/include 的源码 | `GET /api/programs/{name}/source` |
+| 想读透明表数据（不用裸调 RFC_READ_TABLE） | `POST /api/table/read` |
 | **实际调用一个 SAP 函数** | `POST /api/rfc` |
 
 ## 标准操作流程

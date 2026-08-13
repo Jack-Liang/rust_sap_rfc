@@ -143,6 +143,7 @@ pub fn app(pool: SharedPool) -> Router {
         .route("/api/functions/:name/doc", axum::routing::get(function_doc_handler))
         .route("/api/functions/:name/source", axum::routing::get(function_source_handler))
         .route("/api/programs/:name/source", axum::routing::get(program_source_handler))
+        .route("/api/table/read", post(table_read_handler))
         .route("/api/ddic/type/:name", axum::routing::get(ddic_type_handler))
         .route("/api/ddic/field/:table/:field", axum::routing::get(ddic_field_handler))
         .layer(axum::middleware::from_fn(crate::auth::require_api_key))
@@ -678,6 +679,74 @@ async fn program_source_handler(
     let count = lines.len();
     Ok(Json(
         serde_json::json!({"name": name, "count": count, "lines": lines}),
+    ))
+}
+
+/// 读 SAP 透明表数据的请求体。
+#[derive(serde::Deserialize)]
+struct TableReadRequest {
+    /// 表名（如 T000、USR01）
+    table: String,
+    /// 要查的字段名（必填，决定列顺序 + 字段名映射）
+    fields: Vec<String>,
+    /// WHERE 条件（ABAP Open SQL 片段，每段一行；空 = 无过滤）
+    #[serde(default, rename = "where")]
+    where_clauses: Vec<String>,
+    /// 最多返回行数（默认 1000，上限 10000，防全表）
+    #[serde(default)]
+    rowcount: Option<u32>,
+    /// 字段分隔符（解析用，建议罕见字符；默认 \u0001 避免值冲突）
+    #[serde(default)]
+    delimiter: Option<String>,
+}
+
+/// ⑧ `POST /api/table/read` —— 读 SAP 透明表数据（封装 RFC_READ_TABLE，用 ET_DATA 避免截断）
+async fn table_read_handler(
+    axum::extract::State(pool): axum::extract::State<SharedPool>,
+    req: Result<Json<TableReadRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<serde_json::Value>, RfcError> {
+    let Json(req) = req.map_err(|r| RfcError {
+        code: -1,
+        status: r.status().as_u16(),
+        message: r.body_text(),
+        key: "JSON_INVALID".into(),
+    })?;
+    if req.table.trim().is_empty() {
+        return Err(RfcError {
+            code: -1,
+            status: 400,
+            message: "table 不能为空".into(),
+            key: "TABLE_EMPTY".into(),
+        });
+    }
+    if req.fields.is_empty() {
+        return Err(RfcError {
+            code: -1,
+            status: 400,
+            message: "fields 不能为空（必须指定要查的字段）".into(),
+            key: "FIELDS_EMPTY".into(),
+        });
+    }
+    let rowcount = req.rowcount.unwrap_or(1000).min(10000);
+    let delimiter = req
+        .delimiter
+        .as_deref()
+        .and_then(|s| s.chars().next())
+        .unwrap_or('\u{1}');
+    let (table, fields) = (req.table.clone(), req.fields.clone());
+    let rows = run_blocking(pool, move |conn| {
+        crate::discovery::read_table(
+            conn,
+            &req.table,
+            &req.fields,
+            &req.where_clauses,
+            rowcount,
+            delimiter,
+        )
+    })
+    .await?;
+    Ok(Json(
+        serde_json::json!({"table": table, "fields": fields, "count": rows.len(), "rows": rows}),
     ))
 }
 
