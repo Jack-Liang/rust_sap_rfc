@@ -65,10 +65,12 @@ impl IntoResponse for RfcError {
     }
 }
 
-/// SAP "未找到"类 key（函数/DDIC 定义不存在）。
-/// `code 5`(ABAP_EXCEPTION) 配这些 key → 404；其余 code 5 → 400。
+/// SAP "未找到"类 key（函数/DDIC/程序定义不存在）。
+/// 不同 RFC 返回不同 key：`FU_NOT_FOUND`（RfcGetFunctionDesc）、
+/// `FUNCTION_NOT_FOUND`（RPY_FUNCTIONMODULE_READ）、`NOT_FOUND`（RPY_PROGRAM_READ/DDIC）。
+/// 用 contains 匹配所有 `*NOT_FOUND*`，覆盖变体，统一映射 404。
 fn is_not_found_key(key: &str) -> bool {
-    matches!(key, "FU_NOT_FOUND" | "NOT_FOUND")
+    key.contains("NOT_FOUND")
 }
 
 /// 把 SAP RFC_RC 错误码 + key 映射成 HTTP 状态码。
@@ -169,10 +171,15 @@ mod tests {
 
     #[test]
     fn is_not_found_key_recognizes_known_keys() {
+        // 函数：FU_NOT_FOUND（C API）、FUNCTION_NOT_FOUND（RPY_FUNCTIONMODULE_READ）
         assert!(is_not_found_key("FU_NOT_FOUND"));
+        assert!(is_not_found_key("FUNCTION_NOT_FOUND"));
+        // 程序/DDIC：NOT_FOUND（RPY_PROGRAM_READ）
         assert!(is_not_found_key("NOT_FOUND"));
+        // 非未找到
         assert!(!is_not_found_key(""));
         assert!(!is_not_found_key("OTHER_ERROR"));
+        assert!(!is_not_found_key("RFC_COMMUNICATION_FAILURE"));
     }
 
     #[test]

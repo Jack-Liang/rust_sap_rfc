@@ -6,7 +6,7 @@
 - **技术栈**：Rust（标准库 FFI 直连 `sapnwrfc.dll`）+ axum + tokio + serde
 - **零 SDK 依赖客户端**：调用方只要会发 HTTP POST
 - **通用接口**：一个端点 `/api/rfc` 描述任意 BAPI，无需为每个 BAPI 写代码
-- **面向 AI**：5 个元数据端点（搜函数/查接口/查文档/查数据字典），Agent 能自服务探索。给 AI 的操作指南见 [`AGENTS.md`](./AGENTS.md)
+- **面向 AI**：7 个元数据端点（搜函数/查接口/查文档/查数据字典/看源码），Agent 能自服务探索。给 AI 的操作指南见 [`AGENTS.md`](./AGENTS.md)
 
 ## 目录
 
@@ -308,7 +308,7 @@ curl -H "Authorization: Bearer $SAP_API_KEY" \
 
 ### 3.3 面向 AI 的元数据 API
 
-5 个端点让 AI/Agent 自服务地发现函数、理解参数、查数据字典、读文档、看源码。典型工作流：**搜索 → 查接口 → 查文档 → 看源码 → 调用**。给 AI 的完整操作指南见 [`AGENTS.md`](./AGENTS.md)。
+7 个端点让 AI/Agent 自服务地发现函数、理解参数、查数据字典、读文档、看源码。典型工作流：**搜索 → 查接口 → 查文档 → 看源码 → 调用**。给 AI 的完整操作指南见 [`AGENTS.md`](./AGENTS.md)。
 
 | 端点 | 用途 | 示例 |
 |------|------|------|

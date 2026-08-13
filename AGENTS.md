@@ -38,13 +38,14 @@ curl -H "Authorization: Bearer <SAP_API_KEY>" http://127.0.0.1:3000/api/function
 
 ## 标准操作流程
 
-绝大多数任务遵循 **搜索 → 查接口 → 查文档 → 调用** 四步：
+绝大多数任务遵循 **搜索 → 查接口 → 查文档 → 看源码 → 调用** 五步：
 
 ```
 1. 搜函数    POST /api/functions/search     找到目标函数名
 2. 查接口    GET  /api/functions/{name}     看清楚参数名、类型、方向
 3. 查文档    GET  /api/functions/{name}/doc 理解用途、约束、示例
-4. 调用      POST /api/rfc                  按 interface 填参执行
+4. 看源码    GET  /api/functions/{name}/source  理解实现（可选）
+5. 调用      POST /api/rfc                  按 interface 填参执行
 ```
 
 > 不要跳过第 2 步直接调用——SAP 参数名区分大小写且必须大写，类型（CHAR/INT/BCD...）决定如何传值。先查接口能避免 90% 的传参错误。
