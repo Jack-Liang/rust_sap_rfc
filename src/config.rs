@@ -19,6 +19,13 @@ pub struct AppConfig {
     pub request_timeout: std::time::Duration,
     /// 可选限流（按 IP 的每秒请求数；None=不限流，由 `SAP_RATE_LIMIT_RPS` 配置，≥1）
     pub rate_limit_rps: Option<u32>,
+    /// ADT REST 代理基地址（`SAP_ADT_BASE_URL`；未设 → 默认 `http://<ashost>:50000`，
+    /// 设为空串禁用）。用于 /api/adt/** 透传。
+    pub adt_base_url: Option<String>,
+    /// ADT 代理认证用户（`SAP_ADT_USER` 覆盖，默认同 SAP_USER）
+    pub adt_user: String,
+    /// ADT 代理认证密码（`SAP_ADT_PASSWD` 覆盖，默认同 SAP_PASSWD）
+    pub adt_passwd: String,
 }
 
 fn required(key: &str) -> Result<String, String> {
@@ -54,6 +61,14 @@ pub fn load() -> Result<AppConfig, String> {
         .ok()
         .and_then(|s| s.parse::<u32>().ok())
         .filter(|&r| r >= 1);
+    // ADT 代理基地址：未设 → 按 ashost 推导默认；显式空串 → 禁用
+    let adt_base_url = match env::var("SAP_ADT_BASE_URL") {
+        Ok(s) if s.trim().is_empty() => None,
+        Ok(s) => Some(s.trim().to_string()),
+        Err(_) => Some(format!("http://{}:50000", ashost)),
+    };
+    let adt_user = env::var("SAP_ADT_USER").unwrap_or_else(|_| user.clone());
+    let adt_passwd = env::var("SAP_ADT_PASSWD").unwrap_or_else(|_| passwd.clone());
 
     // 键为 'static 字面量，值使用环境变量的 String（运行期存活）
     Ok(AppConfig {
@@ -70,6 +85,9 @@ pub fn load() -> Result<AppConfig, String> {
         api_key,
         request_timeout,
         rate_limit_rps,
+        adt_base_url,
+        adt_user,
+        adt_passwd,
     })
 }
 
@@ -97,6 +115,9 @@ mod tests {
             "SAP_API_KEY",
             "SAP_REQUEST_TIMEOUT_SECS",
             "SAP_RATE_LIMIT_RPS",
+            "SAP_ADT_BASE_URL",
+            "SAP_ADT_USER",
+            "SAP_ADT_PASSWD",
         ] {
             unsafe {
                 std::env::remove_var(k);
@@ -197,5 +218,33 @@ mod tests {
         }
         let err = load().unwrap_err();
         assert!(err.contains("SAP_PASSWD"));
+    }
+
+    #[test]
+    fn load_adt_defaults_and_overrides() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_env();
+        set_all_required();
+        // 未设 → 按 ashost 推导默认端口 50000，认证沿用 SAP_USER/PASSWD
+        let cfg = load().unwrap();
+        assert_eq!(cfg.adt_base_url.as_deref(), Some("http://sap.example.com:50000"));
+        assert_eq!(cfg.adt_user, "TESTUSER");
+        assert_eq!(cfg.adt_passwd, "secret");
+
+        unsafe {
+            std::env::set_var("SAP_ADT_BASE_URL", "https://sap.example.com:44300");
+            std::env::set_var("SAP_ADT_USER", "ADTUSER");
+            std::env::set_var("SAP_ADT_PASSWD", "adtpass");
+        }
+        let cfg = load().unwrap();
+        assert_eq!(cfg.adt_base_url.as_deref(), Some("https://sap.example.com:44300"));
+        assert_eq!(cfg.adt_user, "ADTUSER");
+
+        // 显式空串 → 禁用
+        unsafe {
+            std::env::set_var("SAP_ADT_BASE_URL", "");
+        }
+        let cfg = load().unwrap();
+        assert!(cfg.adt_base_url.is_none());
     }
 }

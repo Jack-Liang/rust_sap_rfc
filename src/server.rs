@@ -151,6 +151,8 @@ pub fn app(pool: SharedPool) -> Router {
         .route("/api/table/read", post(table_read_handler))
         .route("/api/ddic/type/:name", axum::routing::get(ddic_type_handler))
         .route("/api/ddic/field/:table/:field", axum::routing::get(ddic_field_handler))
+        // ADT REST 通用代理（dump 正文、类/程序源码等，任何方法透传）
+        .route("/api/adt/*path", axum::routing::any(crate::adt::adt_proxy))
         .layer(axum::middleware::from_fn(crate::auth::require_api_key))
         .layer(axum::middleware::from_fn(rate_limit_middleware));
 

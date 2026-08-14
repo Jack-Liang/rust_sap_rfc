@@ -478,3 +478,51 @@ fn concurrent_calls_dont_deadlock() {
     let total_ok: u32 = threads.into_iter().map(|t| t.join().unwrap()).sum();
     assert_eq!(total_ok, 24, "8 线程 × 3 请求应全部成功，实际 {} / 24", total_ok);
 }
+
+// ========================================================================
+// ADT REST 代理（/api/adt/**）
+
+#[test]
+#[ignore]
+fn adt_proxy_forwards_dump_list() {
+    let _s = start_server();
+    // ADT dump 列表是标准 GET 资源；透传成功 = 200 + Atom feed 内容
+    let resp = http_client()
+        .get(format!("{}/api/adt/runtime/dumps", _s.base_url))
+        .header("Accept", "*/*")
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 200, "ADT 代理应透传 200，实际 {}", resp.status());
+    let body = resp.text().unwrap();
+    assert!(
+        body.contains("atom:feed") || body.contains("atom:entry"),
+        "响应应是 ADT dump Atom feed"
+    );
+}
+
+#[test]
+#[ignore]
+fn adt_proxy_rejects_traversal() {
+    let _s = start_server();
+    // %2e%2e 解码后构成 .. 段 → 网关侧 400，不应转发到 ICF
+    let resp = http_client()
+        .get(format!("{}/api/adt/runtime/..%2F..%2Fetc", _s.base_url))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 400, "路径穿越应被网关拦截");
+    let body: serde_json::Value = resp.json().unwrap_or_default();
+    assert_eq!(body["error"]["key"], "ADT_PATH_INVALID");
+}
+
+#[test]
+#[ignore]
+fn adt_proxy_passes_through_adt_status() {
+    let _s = start_server();
+    // discovery 资源要求特定 Accept；带错误 Accept 调用 → ICF 的 406 应原样透传
+    let resp = http_client()
+        .get(format!("{}/api/adt/discovery", _s.base_url))
+        .header("Accept", "application/xml")
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), 406, "ADT 自身状态码应透传");
+}

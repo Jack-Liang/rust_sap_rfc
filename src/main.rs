@@ -1,3 +1,4 @@
+mod adt;
 mod api;
 mod auth;
 mod config;
@@ -92,6 +93,13 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     server::init_metrics();
     // 可选限流（按 IP；未设 SAP_RATE_LIMIT_RPS 则不限流）
     server::init_rate_limiter(cfg.rate_limit_rps);
+    // ADT REST 代理（/api/adt/**；SAP_ADT_BASE_URL 为空串时禁用）
+    adt::init(
+        cfg.adt_base_url,
+        &cfg.adt_user,
+        &cfg.adt_passwd,
+        cfg.request_timeout,
+    );
     let shared: server::SharedPool = Arc::new(pool);
 
     server::run(shared, &cfg.listen_addr, wait_shutdown_signal()).await?;

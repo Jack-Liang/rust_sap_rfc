@@ -37,6 +37,8 @@ curl -H "Authorization: Bearer <SAP_API_KEY>" http://127.0.0.1:3000/api/function
 | 想看函数的 ABAP 源码（怎么实现的） | `GET /api/functions/{name}/source` |
 | 想看程序/报表/include 的源码 | `GET /api/programs/{name}/source` |
 | 想读透明表数据（不用裸调 RFC_READ_TABLE） | `POST /api/table/read` |
+| 想查 ABAP 短转储：列表 + 完整 ST22 正文（发生了什么/错误分析） | `GET /api/adt/runtime/dumps` |
+| 想读/写 ABAP 类源码等 ADT（Eclipse 工具链）资源 | `ANY /api/adt/{path}` |
 | **实际调用一个 SAP 函数** | `POST /api/rfc` |
 
 ## 标准操作流程
@@ -145,6 +147,32 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
 - `return_table`：RETURN 消息（若有，字段统一为字符串）
 
 > ⚠️ **表/结构输出默认按字符串读**。需要保留数值语义时，给字段加 `"auto":true`，服务端按 DDIC 真实类型（INT/FLOAT/INT8/BYTE）选择对应 getter。
+
+### 7. ADT REST 代理（dump、类源码等 Eclipse 工具链资源）
+
+`ANY /api/adt/{path}` 把 SAP 系统的 **ADT REST API**（ICF 上的 `/sap/bc/adt/**`，Eclipse 用的同一套）透传出去。凭证由网关统一持有，写方法的 CSRF token 自动处理，调用方只管发 HTTP。
+
+```bash
+# ABAP 短转储列表（Atom feed：错误 ID、终止程序、用户、时间）
+curl -H "Accept: */*" http://127.0.0.1:3000/api/adt/runtime/dumps
+
+# 某条 dump 的完整 ST22 正文（key 取自 feed 条目 rel="self" 链接）
+curl -H "Accept: text/plain" \
+  "http://127.0.0.1:3000/api/adt/runtime/dump/<key>/formatted"
+
+# 读 ABAP 类源码（命名空间/长类名同样可用）
+curl -H "Accept: */*" http://127.0.0.1:3000/api/adt/oo/classes/cl_runtime_error/source/main
+
+# ADT 服务目录（注意它要求 Accept: application/atomsvc+xml）
+curl -H "Accept: application/atomsvc+xml" http://127.0.0.1:3000/api/adt/discovery
+```
+
+行为说明：
+- `/api/adt/` 之后的路径 1:1 映射 ADT 路径（`/api/adt/runtime/dumps` → `/sap/bc/adt/runtime/dumps`）；`%20` 等百分号编码（dump key 里常见）正常工作。
+- 请求侧转发 `Accept`、`Content-Type`、`If-Match`/`If-None-Match` 与 body；响应侧把 ADT 的状态码、`Content-Type`、`ETag`、`Last-Modified` 与 body **原样透传**（多为 XML）——此处的 404/406 来自 ADT 本身，不是网关错误。
+- 写方法（POST/PUT/DELETE/PATCH）：网关自动获取并携带 `X-CSRF-Token` 与会话 Cookie，遇 403（token 过期）自动刷新重试一次。
+- 网关侧故障走 JSON 错误契约：400 `ADT_PATH_INVALID`、502 `ADT_UNREACHABLE`、503 `ADT_DISABLED`（`SAP_ADT_BASE_URL` 为空）、504 `ADT_TIMEOUT`。
+- 需要目标系统的 ADT ICF 服务处于激活状态（SICF）。基地址默认 `http://<SAP_ASHOST>:50000`，可用 `SAP_ADT_BASE_URL` 覆盖（设为空串禁用）。
 
 ## 关键约束（避坑）
 

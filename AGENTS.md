@@ -37,6 +37,8 @@ curl -H "Authorization: Bearer <SAP_API_KEY>" http://127.0.0.1:3000/api/function
 | Want the function's ABAP source (how it's implemented) | `GET /api/functions/{name}/source` |
 | Want the source of a program/report/include | `GET /api/programs/{name}/source` |
 | Want to read transparent table data (without calling RFC_READ_TABLE directly) | `POST /api/table/read` |
+| Want ABAP short-dump info: list, full ST22 text (What happened/Error analysis) | `GET /api/adt/runtime/dumps` |
+| Want to read/write ABAP class sources and other ADT (Eclipse tooling) resources | `ANY /api/adt/{path}` |
 | **Actually invoke an SAP function** | `POST /api/rfc` |
 
 ## Standard workflow
@@ -145,6 +147,32 @@ Response body:
 - `return_table`: RETURN messages (if any; fields uniformly strings)
 
 > ⚠️ **Table/structure outputs are read as strings by default.** To preserve numeric semantics, add `"auto":true` to the field; the server then selects the appropriate getter by the DDIC true type (INT/FLOAT/INT8/BYTE).
+
+### 7. ADT REST proxy (dumps, class sources, anything Eclipse ADT exposes)
+
+`ANY /api/adt/{path}` transparently proxies the SAP system's **ADT REST API** (`/sap/bc/adt/**` on ICF — the same API Eclipse uses). The gateway holds the credentials and handles CSRF tokens for write methods; you just call HTTP.
+
+```bash
+# List ABAP short dumps (Atom feed: error id, terminated program, user, time)
+curl -H "Accept: */*" http://127.0.0.1:3000/api/adt/runtime/dumps
+
+# Full ST22 text of a dump (take the key from the feed entry's rel="self" link)
+curl -H "Accept: text/plain" \
+  "http://127.0.0.1:3000/api/adt/runtime/dump/<key>/formatted"
+
+# Read an ABAP class source (works for namespaced/long names too)
+curl -H "Accept: */*" http://127.0.0.1:3000/api/adt/oo/classes/cl_runtime_error/source/main
+
+# ADT service discovery (note: requires Accept: application/atomsvc+xml)
+curl -H "Accept: application/atomsvc+xml" http://127.0.0.1:3000/api/adt/discovery
+```
+
+Behavior:
+- The URL path after `/api/adt/` maps 1:1 to the ADT path (`/api/adt/runtime/dumps` → `/sap/bc/adt/runtime/dumps`). Percent-encoded characters (e.g. `%20` in dump keys) work.
+- Requests: `Accept`, `Content-Type`, `If-Match`/`If-None-Match` and the body are forwarded. Responses: ADT's HTTP status, `Content-Type`, `ETag`, `Last-Modified` and body are passed through **verbatim** (mostly XML) — a 404/406 here comes from ADT itself, not the gateway.
+- Write methods (POST/PUT/DELETE/PATCH): the gateway fetches and attaches the `X-CSRF-Token` + session cookie automatically and retries once on 403 (token expiry).
+- Gateway-side failures use the JSON error contract: 400 `ADT_PATH_INVALID`, 502 `ADT_UNREACHABLE`, 503 `ADT_DISABLED` (empty `SAP_ADT_BASE_URL`), 504 `ADT_TIMEOUT`.
+- Requires the ADT ICF service to be active in the target system (SICF). Base URL defaults to `http://<SAP_ASHOST>:50000`, override with `SAP_ADT_BASE_URL` (empty string disables).
 
 ## Key constraints (pitfalls to avoid)
 
