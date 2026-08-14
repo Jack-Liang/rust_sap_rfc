@@ -82,6 +82,11 @@ curl http://127.0.0.1:3000/api/functions/BAPI_USER_GETLIST
 - `description`：参数说明
 - `fields`：若为 STRUCTURE/TABLE，列出嵌套字段
 
+> 支持带命名空间的函数名（含 `/`，如 `/SDF/EWA_GET_ABAP_DUMPS`）。
+> URL 路径中原始形式（`/api/functions//SDF/EWA_GET_ABAP_DUMPS`）与
+> 百分号编码形式（`/api/functions/%2FSDF%2FEWA_GET_ABAP_DUMPS`）均可；
+> JSON 请求体（如 `/api/rfc` 的 `func_name`）直接原样传入即可。
+
 ### 3. 查函数文档
 
 ```bash

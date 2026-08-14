@@ -82,6 +82,11 @@ Returns **all parameters** of the function; each parameter has:
 - `description`: parameter description
 - `fields`: for STRUCTURE/TABLE, lists the nested fields
 
+> Namespaced function names (containing `/`, e.g. `/SDF/EWA_GET_ABAP_DUMPS`) are supported.
+> In URL paths, use either the raw form (`/api/functions//SDF/EWA_GET_ABAP_DUMPS`) or the
+> percent-encoded form (`/api/functions/%2FSDF%2FEWA_GET_ABAP_DUMPS`); in JSON bodies
+> (e.g. `func_name` of `/api/rfc`), pass the name as-is.
+
 ### 3. Read function documentation
 
 ```bash

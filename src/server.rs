@@ -144,9 +144,9 @@ pub fn app(pool: SharedPool) -> Router {
     let api = Router::new()
         .route("/api/rfc", post(invoke_handler))
         .route("/api/functions/search", post(search_functions_handler))
-        .route("/api/functions/:name", axum::routing::get(function_interface_handler))
-        .route("/api/functions/:name/doc", axum::routing::get(function_doc_handler))
-        .route("/api/functions/:name/source", axum::routing::get(function_source_handler))
+        // 函数名可能带 /NS/ 命名空间前缀（如 /SDF/X），路径参数无法匹配多段路径，
+        // 统一用通配路由捕获后按尾部 /doc、/source 分发（见 function_route_dispatcher）。
+        .route("/api/functions/*name", axum::routing::get(function_route_dispatcher))
         .route("/api/programs/:name/source", axum::routing::get(program_source_handler))
         .route("/api/table/read", post(table_read_handler))
         .route("/api/ddic/type/:name", axum::routing::get(ddic_type_handler))
@@ -540,6 +540,31 @@ fn param_info_to_field_def(
         description: p.parameter_text.clone(),
         fields,
     })
+}
+
+/// GET /api/functions/{name}[/doc|/source] 的统一入口。
+/// 命名空间函数名自带斜杠（如 /SDF/X），通配路由整段捕获后在此按尾部拆分分发；
+/// 原始斜杠（/api/functions//SDF/X）与 %2F 编码两种 URL 形式均能命中。
+/// 小写 /doc、/source 不会出现在合法函数名中（SAP 函数名为大写），按尾部识别是安全的。
+async fn function_route_dispatcher(
+    axum::extract::State(pool): axum::extract::State<SharedPool>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    axum::extract::Query(q): axum::extract::Query<LangQuery>,
+) -> axum::response::Response {
+    use axum::extract::{Path, Query, State};
+    if let Some(base) = name.strip_suffix("/doc").filter(|b| !b.is_empty()) {
+        return function_doc_handler(State(pool), Path(base.to_string()), Query(q))
+            .await
+            .into_response();
+    }
+    if let Some(base) = name.strip_suffix("/source").filter(|b| !b.is_empty()) {
+        return function_source_handler(State(pool), Path(base.to_string()))
+            .await
+            .into_response();
+    }
+    function_interface_handler(State(pool), Path(name))
+        .await
+        .into_response()
 }
 
 /// ① GET /api/functions/:name —— 查函数完整接口（参数/类型/方向/嵌套字段）

@@ -317,7 +317,8 @@ pub const MAX_TABLE_ROWS: usize = 100_000;
 /// 调用方需要分页应改用 /api/table/read（带 rowcount）。
 pub const MAX_OUTPUT_ROWS: u32 = 10_000;
 
-/// 校验函数名：非空、≤30 字符、仅含 [A-Za-z0-9_]。
+/// 校验函数名：非空、≤30 字符、主体仅 [A-Za-z0-9_]，允许可选的 SAP 命名空间前缀
+/// `/NS/`（如 `/SDF/EWA_GET_ABAP_DUMPS`）：斜杠只能成对出现在前缀处，两段均非空且字符合法。
 /// 非法返回 400 错误。空/超长/含特殊字符都拒绝，避免传给 FFI 后的未定义行为。
 pub fn validate_func_name(name: &str) -> Result<(), RfcError> {
     if name.is_empty() {
@@ -340,14 +341,19 @@ pub fn validate_func_name(name: &str) -> Result<(), RfcError> {
             ..Default::default()
         });
     }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    let valid = match name.strip_prefix('/') {
+        // 命名空间形态 /NS/NAME：恰一个内嵌斜杠分隔，两段均为合法标识符
+        Some(rest) => match rest.split_once('/') {
+            Some((ns, base)) => is_valid_ident(ns) && is_valid_ident(base),
+            None => false,
+        },
+        None => is_valid_ident(name),
+    };
+    if !valid {
         return Err(RfcError {
             code: -1,
             message: format!(
-                "func_name '{}' 含非法字符（仅允许字母、数字、下划线）",
+                "func_name '{}' 含非法字符（仅允许字母、数字、下划线；可带 /NS/ 命名空间前缀）",
                 name
             ),
             status: 400,
@@ -355,6 +361,11 @@ pub fn validate_func_name(name: &str) -> Result<(), RfcError> {
         });
     }
     Ok(())
+}
+
+/// SAP 标识符段：非空且仅 [A-Za-z0-9_]（函数名主体或命名空间段）
+fn is_valid_ident(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// 长度与类型解析结果（来自元数据缓存或调用方提供的 resolver）
@@ -1300,6 +1311,10 @@ mod tests {
         assert!(validate_func_name("BAPI_USER_GETLIST").is_ok());
         assert!(validate_func_name("RFC_FUNCTION_SEARCH").is_ok());
         assert!(validate_func_name("Z_FOO_123").is_ok());
+        // 命名空间前缀形态
+        assert!(validate_func_name("/SDF/EWA_GET_ABAP_DUMPS").is_ok());
+        assert!(validate_func_name("/AIF/SUBMIT_FUNCTION").is_ok());
+        assert!(validate_func_name("/BOBF/R_FRUIT").is_ok());
     }
 
     #[test]
@@ -1323,6 +1338,27 @@ mod tests {
             let err = validate_func_name(bad).unwrap_err();
             assert_eq!(err.status, 400, "{} 应被拒绝", bad);
             assert!(err.message.contains("非法字符"), "{} 的错误信息应含非法字符", bad);
+        }
+    }
+
+    #[test]
+    fn validate_func_name_rejects_malformed_slashes() {
+        // 斜杠只允许作为 /NS/ 前缀出现，且两段非空
+        for bad in [
+            "FOO/BAR",     // 无命名空间前缀的斜杠
+            "/SDF",        // 只有前斜杠
+            "/SDF/",       // 名字段为空
+            "//X",         // 命名空间段为空
+            "/SDF/X/Y",    // 多余斜杠
+            "/SDF/X/",     // 尾斜杠
+        ] {
+            let err = validate_func_name(bad).unwrap_err();
+            assert_eq!(err.status, 400, "{} 应被拒绝", bad);
+            assert!(
+                err.message.contains("非法字符"),
+                "{} 的错误信息应含非法字符",
+                bad
+            );
         }
     }
 
