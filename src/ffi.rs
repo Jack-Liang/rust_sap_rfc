@@ -14,15 +14,33 @@ pub type RFC_FUNCTION_DESC_HANDLE = *mut c_void;
 pub type RFC_TABLE_HANDLE = *mut c_void;
 pub type RFC_STRUCTURE_HANDLE = *mut c_void;
 
+// RFC_RC 返回码常量：值严格对应 nwrfcsdk/include/sapnwrfc.h 中 _RFC_RC 枚举
+// （C 枚举从 0 递增）。曾有若干值凭记忆写错（如把 BUFFER_TOO_SMALL 写成 29，
+// 实际为 23），导致自适应重读与连接重连判定失效，现逐项对照 SDK 头文件核对。
+// 全部用命名常量，避免其它模块再写魔法数字。
 pub const RFC_OK: RFC_RC = 0;
+pub const RFC_COMMUNICATION_FAILURE: RFC_RC = 1;
+pub const RFC_LOGON_FAILURE: RFC_RC = 2;
+pub const RFC_ABAP_RUNTIME_FAILURE: RFC_RC = 3; // SYSTEM_FAILURE / shortdump
+pub const RFC_ABAP_MESSAGE: RFC_RC = 4;
+pub const RFC_ABAP_EXCEPTION: RFC_RC = 5;
+pub const RFC_CLOSED: RFC_RC = 6; // 连接被对端/gateway 关闭
+#[allow(dead_code)]
+pub const RFC_CANCELED: RFC_RC = 7;
+pub const RFC_TIMEOUT: RFC_RC = 8;
+#[allow(dead_code)]
+pub const RFC_MEMORY_INSUFFICIENT: RFC_RC = 9;
+#[allow(dead_code)]
+pub const RFC_INVALID_HANDLE: RFC_RC = 13;
+pub const RFC_RETRY: RFC_RC = 14; // RfcListenAndDispatch 超时期间无入站调用
+pub const RFC_EXTERNAL_FAILURE: RFC_RC = 15; // 外部回调失败 → 回传 SYSTEM_FAILURE
+pub const RFC_NOT_FOUND: RFC_RC = 17; // 函数/结构定义不存在（Metadata API）
+pub const RFC_INVALID_PARAMETER: RFC_RC = 20;
+pub const RFC_CONVERSION_FAILURE: RFC_RC = 22; // 类型转换失败（连接仍健康，不应触发重连）
 /// 缓冲区过小：调用方传的 max_len 不足，actual_len 给出真实长度。
-/// 用于 get_chars 的自适应重试逻辑。
-pub const RFC_BUFFER_TOO_SMALL: RFC_RC = 29; // RFC_RC.RFC_BUFFER_TOO_SMALL
-
-// Server dispatch 循环相关返回码（RFC_RC 枚举按顺序：0=OK,1=COMM,2=LOGON...）
-pub const RFC_RETRY: RFC_RC = 15; // RfcListenAndDispatch 超时无调用
-pub const RFC_CLOSED: RFC_RC = 7; // 连接被对端关闭（gateway 断开）
-pub const RFC_EXTERNAL_FAILURE: RFC_RC = 16; // 外部代码（回调）失败 → 回传 SYSTEM_FAILURE
+/// 用于 get_chars/get_xstring 的自适应重试逻辑。
+pub const RFC_BUFFER_TOO_SMALL: RFC_RC = 23;
+pub const RFC_AUTHORIZATION_FAILURE: RFC_RC = 29;
 
 // RFC_DIRECTION 位掩码（用于注册函数参数时声明方向）
 pub const RFC_DIRECTION_IMPORT: c_int = 0x01;
@@ -410,10 +428,24 @@ mod tests {
 
     #[test]
     fn rc_constants_match_sdk_enum() {
+        // 值取自 nwrfcsdk/include/sapnwrfc.h 的 _RFC_RC 枚举（C 枚举从 0 递增）
         assert_eq!(RFC_OK, 0);
-        assert_eq!(RFC_BUFFER_TOO_SMALL, 29);
-        assert_eq!(RFC_RETRY, 15);
-        assert_eq!(RFC_CLOSED, 7);
-        assert_eq!(RFC_EXTERNAL_FAILURE, 16);
+        assert_eq!(RFC_COMMUNICATION_FAILURE, 1);
+        assert_eq!(RFC_LOGON_FAILURE, 2);
+        assert_eq!(RFC_ABAP_RUNTIME_FAILURE, 3);
+        assert_eq!(RFC_ABAP_MESSAGE, 4);
+        assert_eq!(RFC_ABAP_EXCEPTION, 5);
+        assert_eq!(RFC_CLOSED, 6);
+        assert_eq!(RFC_CANCELED, 7);
+        assert_eq!(RFC_TIMEOUT, 8);
+        assert_eq!(RFC_MEMORY_INSUFFICIENT, 9);
+        assert_eq!(RFC_INVALID_HANDLE, 13);
+        assert_eq!(RFC_RETRY, 14);
+        assert_eq!(RFC_EXTERNAL_FAILURE, 15);
+        assert_eq!(RFC_NOT_FOUND, 17);
+        assert_eq!(RFC_INVALID_PARAMETER, 20);
+        assert_eq!(RFC_CONVERSION_FAILURE, 22);
+        assert_eq!(RFC_BUFFER_TOO_SMALL, 23);
+        assert_eq!(RFC_AUTHORIZATION_FAILURE, 29);
     }
 }

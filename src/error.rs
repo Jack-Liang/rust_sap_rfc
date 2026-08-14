@@ -1,4 +1,8 @@
-use crate::ffi::{RFC_ERROR_INFO, RFC_OK, RFC_RC};
+use crate::ffi::{
+    RFC_ABAP_EXCEPTION, RFC_ABAP_MESSAGE, RFC_AUTHORIZATION_FAILURE, RFC_BUFFER_TOO_SMALL,
+    RFC_CLOSED, RFC_COMMUNICATION_FAILURE, RFC_CONVERSION_FAILURE, RFC_ERROR_INFO,
+    RFC_INVALID_PARAMETER, RFC_NOT_FOUND, RFC_OK, RFC_RC, RFC_TIMEOUT,
+};
 use crate::string_utils::sap_uc_to_string;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -75,29 +79,31 @@ fn is_not_found_key(key: &str) -> bool {
 
 /// 把 SAP RFC_RC 错误码 + key 映射成 HTTP 状态码。
 ///
-/// 映射依据 sapnwrfc.h 的 _RFC_RC 枚举顺序（从 0 开始）：
-/// - 4xx（调用方错误）：ABAP 异常/消息(4,5)→400；但函数/DDIC 不存在(key FU_NOT_FOUND/NOT_FOUND)→404；
-///   参数无效/转换失败(20,23)→400；授权失败(25)→403
-/// - 5xx（服务端/上游错误）：通信失败(1)、连接关闭(6)→502；
-///   运行时失败(3)、内存不足(11)→500；超时(9)→504
+/// 各 RFC_RC 常量值见 ffi.rs（严格对应 sapnwrfc.h 的 _RFC_RC 枚举）。映射语义：
+/// - 4xx（调用方错误）：ABAP_MESSAGE(4)/ABAP_EXCEPTION(5)→400，但 key 含 NOT_FOUND→404；
+///   NOT_FOUND(17)→404；参数无效(20)/类型转换失败(22)→400；授权失败(29)→403
+/// - 5xx（上游/网络错误）：通信失败(1)/连接关闭(6)→502；
+///   运行时失败(3)/内存不足(9)/未知码→500；超时(8)→504
+/// - BUFFER_TOO_SMALL(23) 是内部可重试码，正常被自适应重读吸收；万一漏到这里归 500
 fn status_for_rc(rc: RFC_RC, key: &str) -> u16 {
     match rc {
         // 4xx：调用方导致的错误（改请求可恢复）
-        4 | 5 => {
-            // ABAP_MESSAGE / ABAP_EXCEPTION：按 key 区分"未找到"→404，其余→400
+        RFC_ABAP_MESSAGE | RFC_ABAP_EXCEPTION => {
+            // 按 key 区分"未找到"→404，其余→400
             if is_not_found_key(key) {
                 404
             } else {
                 400
             }
         }
-        17 => 404,              // RFC_NOT_FOUND（函数/结构定义不存在）
-        20 | 23 => 400,         // RFC_INVALID_PARAMETER / RFC_CONVERSION_FAILURE
-        25 => 403,              // RFC_AUTHORIZATION_FAILURE
-        // 5xx：上游/服务端错误
-        1 | 6 => 502,           // RFC_COMMUNICATION_FAILURE / RFC_CLOSED（网关/连接问题）
-        9 => 504,               // RFC_TIMEOUT
-        _ => 500,               // 其余（含 ABAP_RUNTIME_FAILURE、未知码）按 500
+        RFC_NOT_FOUND => 404,                              // 函数/DDIC/结构定义不存在
+        RFC_INVALID_PARAMETER | RFC_CONVERSION_FAILURE => 400, // 传参错/类型转换失败
+        RFC_AUTHORIZATION_FAILURE => 403,                  // 权限不足
+        // 5xx：上游/网络错误
+        RFC_COMMUNICATION_FAILURE | RFC_CLOSED => 502,     // 网络/网关/连接问题
+        RFC_TIMEOUT => 504,                                // SAP 端超时
+        RFC_BUFFER_TOO_SMALL => 500, // 内部重试码：正常被自适应重读吸收，漏到这里归 500
+        _ => 500, // 其余（ABAP_RUNTIME_FAILURE=3 / MEMORY_INSUFFICIENT=9 / 未知码）
     }
 }
 
@@ -160,12 +166,13 @@ mod tests {
         assert_eq!(status_for_rc(5, "NOT_FOUND"), 404); // DDIC 不存在
         assert_eq!(status_for_rc(17, ""), 404); // NOT_FOUND
         assert_eq!(status_for_rc(20, ""), 400); // INVALID_PARAMETER
-        assert_eq!(status_for_rc(23, ""), 400); // CONVERSION_FAILURE
-        assert_eq!(status_for_rc(25, ""), 403); // AUTHORIZATION_FAILURE
+        assert_eq!(status_for_rc(22, ""), 400); // CONVERSION_FAILURE
+        assert_eq!(status_for_rc(29, ""), 403); // AUTHORIZATION_FAILURE
         assert_eq!(status_for_rc(1, ""), 502); // COMMUNICATION_FAILURE
         assert_eq!(status_for_rc(6, ""), 502); // CLOSED
-        assert_eq!(status_for_rc(9, ""), 504); // TIMEOUT
+        assert_eq!(status_for_rc(8, ""), 504); // TIMEOUT
         assert_eq!(status_for_rc(3, ""), 500); // ABAP_RUNTIME_FAILURE
+        assert_eq!(status_for_rc(9, ""), 500); // MEMORY_INSUFFICIENT
         assert_eq!(status_for_rc(99, ""), 500); // 未知码
     }
 
@@ -216,11 +223,15 @@ mod tests {
     }
 
     #[test]
-    fn status_mapping_for_closed_rc() {
-        // rc=22 (RFC_CLOSED 在某些 SDK 版本) 不在 status_for_rc 的显式分支里，
-        // 但它在 RECONNECT_RC（pool 触发重连）。锁住其 HTTP 语义：走 _=>500。
-        // 注：标准 RFC_CLOSED=7（已测），这里测 22 确保不变。
-        assert_eq!(status_for_rc(22, ""), 500);
+    fn status_mapping_for_previously_misassigned_rc() {
+        // 这几个码此前因 RFC_RC 枚举值搞错而映射错误，现按 SDK 真实枚举值（见 ffi.rs）锁死：
+        assert_eq!(status_for_rc(RFC_TIMEOUT, ""), 504); // 真实 8（此前误用 9=MEMORY_INSUFFICIENT）
+        assert_eq!(status_for_rc(RFC_AUTHORIZATION_FAILURE, ""), 403); // 真实 29（此前误用 25=TABLE_MOVE_EOF）
+        assert_eq!(status_for_rc(RFC_CONVERSION_FAILURE, ""), 400); // 真实 22（此前误并入 23）
+        // BUFFER_TOO_SMALL(23) 是内部自适应重试码，正常不会暴露给用户；万一漏到这里归 500
+        assert_eq!(status_for_rc(RFC_BUFFER_TOO_SMALL, ""), 500);
+        // RFC_CLOSED 真实值是 6（此前常量错写成 7）；锁住其 502 语义
+        assert_eq!(status_for_rc(RFC_CLOSED, ""), 502);
     }
 
     #[test]

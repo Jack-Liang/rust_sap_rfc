@@ -10,17 +10,21 @@
 
 use crate::connection::RfcConnection;
 use crate::error::RfcError;
-use crate::ffi::RFC_RC;
+use crate::ffi::{
+    RFC_ABAP_RUNTIME_FAILURE, RFC_CLOSED, RFC_COMMUNICATION_FAILURE, RFC_LOGON_FAILURE, RFC_RC,
+};
 use std::sync::{Condvar, Mutex};
 
 /// 触发「丢弃该连接」的 SAP 错误码集合。
-/// 这些都是「连接已不可用」类错误，复用废连接无意义，应销毁后新建。
-/// 取自 sapnwrfc.h 中 RFC_RC 枚举的通信/系统失败类。
+///
+/// 这些都是「连接已不可用 / 状态不可靠」类错误，复用废连接无意义，应销毁后新建。
+/// 用 ffi 命名常量（值见 nwrfcsdk/include/sapnwrfc.h 的 _RFC_RC 枚举），不再写魔法数字，
+/// 避免此前把 CONVERSION_FAILURE(22) 误当 CLOSED 的错误。
 const RECONNECT_RC: [RFC_RC; 4] = [
-    1,  // RFC_COMMUNICATION_FAILURE
-    2,  // RFC_SYSTEM_FAILURE
-    3,  // RFC_ABAP_EXCEPTION（部分场景连接状态也会变坏）
-    22, // RFC_CLOSED（连接已被关闭）
+    RFC_COMMUNICATION_FAILURE, // 1：网络/通信层失败
+    RFC_LOGON_FAILURE,         // 2：登录/会话失效，重连可能恢复
+    RFC_ABAP_RUNTIME_FAILURE,  // 3：SYSTEM_FAILURE(shortdump) 后连接状态不可靠
+    RFC_CLOSED,                // 6：连接被对端/gateway 关闭
 ];
 
 fn should_discard(err: &RfcError) -> bool {
@@ -268,8 +272,9 @@ mod tests {
 
     #[test]
     fn should_discard_for_communication_errors() {
-        // RECONNECT_RC = [1, 2, 3, 22]
-        for rc in [1i32, 2, 3, 22] {
+        // RECONNECT_RC = [COMMUNICATION_FAILURE(1), LOGON_FAILURE(2),
+        //                 ABAP_RUNTIME_FAILURE(3), CLOSED(6)]
+        for rc in [1i32, 2, 3, 6] {
             let err = RfcError {
                 code: rc,
                 ..Default::default()
@@ -280,8 +285,10 @@ mod tests {
 
     #[test]
     fn should_not_discard_for_non_communication_errors() {
-        // 非 RECONNECT_RC 的码不丢弃（连接仍健康）
-        for rc in [0i32, 5, 7, 9, 17, 20, 23, 25, -1] {
+        // 非 RECONNECT_RC 的码不丢弃（连接仍健康）。
+        // 注意：CONVERSION_FAILURE(22)、BUFFER_TOO_SMALL(23) 是数据/缓冲区问题，
+        //       连接本身健康，复用即可——此前误把 22 当 CLOSED 导致无谓重连。
+        for rc in [0i32, 5, 7, 9, 17, 20, 22, 23, 25, -1] {
             let err = RfcError {
                 code: rc,
                 ..Default::default()
