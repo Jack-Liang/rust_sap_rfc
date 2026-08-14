@@ -1,63 +1,65 @@
-# SAP 权限配置（L1：网关账号最小权限）
+# SAP Authorization Configuration (L1: Minimum Privileges for the Gateway Account)
 
-## 为什么
+[English](./SAP_PERMISSIONS.md) | [简体中文](./SAP_PERMISSIONS.zh-CN.md)
 
-rust_sap_rfc 网关用 `.env` 里的 `SAP_USER` 连 SAP。**网关能调什么 = 这个账号有什么权限**。
+## Why It Matters
 
-默认用 `DEVELOPER`（开发账号，权限很宽）= 任何能访问网关的人都能调 `DEVELOPER` 能调的函数（读主数据、改订单、建用户…）。
+The rust_sap_rfc gateway connects to SAP using the `SAP_USER` defined in `.env`. **What the gateway can call = the privileges granted to that account.**
 
-**正确做法**：建一个**专用受限账号**，只授业务需要的 Function Group 权限。这样即使网关被滥用或 token 泄露，影响面 = 该账号权限（最小）。
+By default it uses `DEVELOPER` (a developer account with broad privileges). This means anyone who can reach the gateway can call every function that `DEVELOPER` can invoke—reading master data, changing orders, creating users, and so on.
 
-> 这比在网关层维护函数白名单更有效——SAP 的权限系统（PFCG / `S_RFC`）就是为此设计，工具齐全且更完善。
+**The right approach**: create a dedicated, restricted account and grant it only the Function Group authorizations the business actually needs. This way, if the gateway is abused or a token leaks, the blast radius is limited to that account's privileges (a minimum).
 
-## 配置步骤（Basis 操作）
+> This is more effective than maintaining a function allowlist at the gateway layer. SAP's authorization system (PFCG / `S_RFC`) is purpose-built for this, with mature tooling.
 
-### 1. 建专用服务账号（SU01）
+## Configuration Steps (Basis Administration)
 
-- 事务码 `SU01`，新建用户（如 `SAP_RFC_GW`）
-- 用户类型：**System**（系统用户，不能交互登录，专供 RFC）
-- 初始密码：设强密码（记下，填进 `.env`）
+### 1. Create a Dedicated Service Account (SU01)
 
-### 2. 创建角色（PFCG）
+- In transaction `SU01`, create a new user (e.g. `SAP_RFC_GW`).
+- User type: **System** (a system user that cannot log on interactively; intended for RFC).
+- Initial password: set a strong password (record it for `.env`).
 
-- 事务码 `PFCG`，新建角色（如 `Z_RFC_GW_READONLY`）
-- 在「权限」标签页加权限对象 **`S_RFC`**：
-  - `ACTVT` = `16`（执行 RFC）
-  - `RFC_TYPE` = `FUNC`（Function Group）
-  - `RFC_NAME` = <允许的 function group，如 `BAPI_USER_BANK`、`SRFC`、自开发的 `Z*` 组>
-  - **不要用 `*`**（= 全授权，等同 DEVELOPER）
+### 2. Create a Role (PFCG)
 
-> `RFC_NAME` 可多值。按业务**最小授权**：只列实际要调的 function group。
+- In transaction `PFCG`, create a new role (e.g. `Z_RFC_GW_READONLY`).
+- On the **Authorizations** tab, add authorization object **`S_RFC`**:
+  - `ACTVT` = `16` (Execute RFC)
+  - `RFC_TYPE` = `FUNC` (Function Group)
+  - `RFC_NAME` = <allowed function groups, e.g. `BAPI_USER_BANK`, `SRFC`, or custom `Z*` groups>
+  - **Do not use `*`** (full authorization; equivalent to DEVELOPER).
+
+> `RFC_NAME` accepts multiple values. Apply **least privilege** based on business needs—list only the function groups you will actually call.
 >
-> 常见只读组（按需）：`SZRP`（RFC 元数据，网关元数据端点需要）、`SUPI`/`SUSR`（用户相关 BAPI）等。
+> Common read-only groups (as needed): `SZRP` (RFC metadata, required by the gateway's metadata endpoints), `SUPI`/`SUSR` (user-related BAPIs), and others.
 
-### 3. 给账号分配角色
+### 3. Assign the Role to the Account
 
-- `SU01` → 给 `SAP_RFC_GW` 分配 `Z_RFC_GW_READONLY` 角色
-- `PFCG` → 角色生成 profile
+- In `SU01`, assign the `Z_RFC_GW_READONLY` role to `SAP_RFC_GW`.
+- In `PFCG`, generate the role's profile.
 
-### 4. 改 `.env`
+### 4. Update `.env`
 
 ```env
 SAP_USER=SAP_RFC_GW
-SAP_PASSWD=<新账号密码>
+SAP_PASSWD=<new account password>
 ```
 
-重启网关生效。
+Restart the gateway for the change to take effect.
 
-### 5. 验证
+### 5. Verify
 
-- 调**有授权**的函数（如 `BAPI_USER_GETLIST`，若在授权组）→ `200`
-- 调**未授权**的函数（如某财务 BAPI，不在授权组）→ `403 {"error":{"code":403,"key":"RFC_AUTHORIZATION_FAILURE"}}`
+- Call an **authorized** function (e.g. `BAPI_USER_GETLIST`, if it is in an authorized group) → `200`.
+- Call an **unauthorized** function (e.g. a finance BAPI not in any authorized group) → `403 {"error":{"code":403,"key":"RFC_AUTHORIZATION_FAILURE"}}`.
 
-未授权 → `403`，说明权限边界生效（白名单的活，SAP 替你干了）。
+An unauthorized call returning `403` confirms the privilege boundary is in effect—SAP handles the allowlist enforcement for you.
 
-## 为什么不在网关层做白名单
+## Why Not Build an Allowlist at the Gateway Layer
 
-- SAP 有上万函数，单函数白名单维护爆炸 + 永远漏
-- SAP 权限系统（`S_RFC`）按 **function group** 聚合（几十条规则 vs 万个函数），粒度和"业务能力"对齐
-- 网关层白名单是可选的"第二道闸"（L2，按 group 前缀过滤），L1（SAP 权限）是**第一道且最有效**
+- SAP ships tens of thousands of functions; a per-function allowlist is unmaintainable and always leaks.
+- SAP's authorization system (`S_RFC`) aggregates by **function group** (a few dozen rules vs. thousands of functions), with a granularity aligned to business capabilities.
+- A gateway-layer allowlist is an optional "second gate" (L2, filtering by group prefix). L1 (SAP authorizations) is the **first and most effective** layer.
 
-## 网关层补充（可选 L2）
+## Gateway-Layer Supplement (Optional L2)
 
-若想"即使 SAP 账号权限宽，网关也再加一道闸"，可按 function group 前缀过滤（配置 `SAP_ALLOWED_GROUPS`）。通常 L1 够用，L2 看场景。
+If you want "an extra gate at the gateway even when the SAP account has broad privileges," you can filter by function group prefix by configuring `SAP_ALLOWED_GROUPS`. In most cases L1 is sufficient; apply L2 as the situation requires.

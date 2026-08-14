@@ -1,59 +1,61 @@
 # AGENTS.md
 
-本文件指导 AI/Agent 如何使用 rust_sap_rfc 服务。
+[English](./AGENTS.md) | [简体中文](./AGENTS.zh-CN.md)
 
-## 这是什么
+This file guides AI/Agents on how to use the rust_sap_rfc service.
 
-rust_sap_rfc 是一个 **SAP NWRFC → REST 网关**：把 SAP 的 RFC/BAPI 函数暴露为 HTTP 接口。你（AI）通过它能在不安装 SAP 客户端的情况下，搜索、查询、调用 SAP 系统里的函数模块。
+## What it is
 
-- **项目地址**：https://github.com/Jack-Liang/rust_sap_rfc
-- **问题反馈**：https://github.com/Jack-Liang/rust_sap_rfc/issues
+rust_sap_rfc is a **SAP NWRFC → REST gateway**: it exposes SAP RFC/BAPI function modules as HTTP endpoints. Through it, you (the AI) can search, inspect, and invoke function modules in an SAP system without installing an SAP client.
 
-服务默认监听 `http://127.0.0.1:3000`（地址可由 `SAP_LISTEN_ADDR` 覆盖）。
+- **Project**: https://github.com/Jack-Liang/rust_sap_rfc
+- **Issues**: https://github.com/Jack-Liang/rust_sap_rfc/issues
 
-## 认证（可选）
+The service listens on `http://127.0.0.1:3000` by default (override with `SAP_LISTEN_ADDR`).
 
-默认**免鉴权**（本机访问）。若部署方设置了环境变量 `SAP_API_KEY`，则所有 `/api/*` 端点要求请求头 `Authorization: Bearer <token>`：
+## Authentication (optional)
+
+By default the service is **unauthenticated** (local access). If the deployer sets the `SAP_API_KEY` environment variable, all `/api/*` endpoints require the `Authorization: Bearer <token>` request header:
 
 ```bash
 curl -H "Authorization: Bearer <SAP_API_KEY>" http://127.0.0.1:3000/api/functions/BAPI_USER_GETLIST
 ```
 
-- 未带 / 错 token → `401 {"code":401,"message":"..."}`。
-- 探针 `/health`、`/ready` 与公开页 `/`、`/agents.md` **始终免鉴权**（不需要 token）。
-- 是否启用由部署方决定。本机默认环境通常免鉴权——你可先不带 token 试，收到 401 再向部署方索取。
+- Missing or wrong token → `401 {"code":401,"message":"..."}`.
+- The probes `/health`, `/ready` and the public pages `/`, `/agents.md` are **always unauthenticated** (no token required).
+- Whether auth is enabled is decided by the deployer. The default local environment is usually unauthenticated — try without a token first, and request one from the deployer if you receive a 401.
 
-## 你能做什么
+## What you can do
 
-| 目标 | 用哪个端点 |
+| Goal | Endpoint |
 |------|-----------|
-| 不知道有哪些函数 → 按名字模糊搜索 | `POST /api/functions/search` |
-| 知道函数名，想知道参数怎么填 | `GET /api/functions/{name}` |
-| 想读函数的完整文档（用途、示例） | `GET /api/functions/{name}/doc` |
-| 想查某张表/结构有哪些字段 | `GET /api/ddic/type/{name}` |
-| 想理解某个字段的含义、合法取值 | `GET /api/ddic/field/{table}/{field}` |
-| 想看函数的 ABAP 源码（怎么实现的） | `GET /api/functions/{name}/source` |
-| 想看程序/报表/include 的源码 | `GET /api/programs/{name}/source` |
-| 想读透明表数据（不用裸调 RFC_READ_TABLE） | `POST /api/table/read` |
-| **实际调用一个 SAP 函数** | `POST /api/rfc` |
+| Don't know which functions exist → fuzzy search by name | `POST /api/functions/search` |
+| Know the function name, want to know how to fill parameters | `GET /api/functions/{name}` |
+| Want full function documentation (purpose, examples) | `GET /api/functions/{name}/doc` |
+| Want the fields of a table/structure | `GET /api/ddic/type/{name}` |
+| Want to understand a field's meaning and valid values | `GET /api/ddic/field/{table}/{field}` |
+| Want the function's ABAP source (how it's implemented) | `GET /api/functions/{name}/source` |
+| Want the source of a program/report/include | `GET /api/programs/{name}/source` |
+| Want to read transparent table data (without calling RFC_READ_TABLE directly) | `POST /api/table/read` |
+| **Actually invoke an SAP function** | `POST /api/rfc` |
 
-## 标准操作流程
+## Standard workflow
 
-绝大多数任务遵循 **搜索 → 查接口 → 查文档 → 看源码 → 调用** 五步：
+Most tasks follow five steps: **search → inspect interface → read docs → view source → invoke**:
 
 ```
-1. 搜函数    POST /api/functions/search     找到目标函数名
-2. 查接口    GET  /api/functions/{name}     看清楚参数名、类型、方向
-3. 查文档    GET  /api/functions/{name}/doc 理解用途、约束、示例
-4. 看源码    GET  /api/functions/{name}/source  理解实现（可选）
-5. 调用      POST /api/rfc                  按 interface 填参执行
+1. Search functions  POST /api/functions/search      Find the target function name
+2. Inspect interface GET  /api/functions/{name}      See parameter names, types, directions
+3. Read docs         GET  /api/functions/{name}/doc  Understand purpose, constraints, examples
+4. View source       GET  /api/functions/{name}/source  Understand the implementation (optional)
+5. Invoke            POST /api/rfc                   Fill parameters per the interface and execute
 ```
 
-> 不要跳过第 2 步直接调用——SAP 参数名区分大小写且必须大写，类型（CHAR/INT/BCD...）决定如何传值。先查接口能避免 90% 的传参错误。
+> Do not skip step 2 and invoke directly — SAP parameter names are case-sensitive and must be uppercase, and the type (CHAR/INT/BCD...) determines how to pass values. Inspecting the interface first avoids 90% of parameter mistakes.
 
-## 端点速查（含可复制的示例）
+## Endpoint quick reference (copyable examples)
 
-### 1. 搜索函数
+### 1. Search functions
 
 ```bash
 curl -X POST http://127.0.0.1:3000/api/functions/search \
@@ -61,52 +63,52 @@ curl -X POST http://127.0.0.1:3000/api/functions/search \
   -d '{"pattern":"BAPI_USER_*","max_results":10}'
 ```
 
-- `pattern`：函数名通配符，`*` 匹配任意。如 `BAPI_*`、`RFC_*`。
-- 返回 `functions` 数组，每项含 `name` / `group` / `description`。
-- 无匹配返回 `200 {"count":0,"functions":[]}`（**不是错误**）。
+- `pattern`: function name wildcard; `*` matches anything. E.g. `BAPI_*`, `RFC_*`.
+- Returns a `functions` array; each item has `name` / `group` / `description`.
+- No match returns `200 {"count":0,"functions":[]}` (**not an error**).
 
-### 2. 查函数接口
+### 2. Inspect function interface
 
 ```bash
 curl http://127.0.0.1:3000/api/functions/BAPI_USER_GETLIST
 ```
 
-返回该函数的**全部参数**，每个参数含：
-- `name`：参数名（**传入时必须用这个原样大写名**）
-- `type`：`CHAR` / `INT` / `STRUCTURE` / `TABLE` / `BCD` / `DATE` ...
-- `direction`：`IMPORT`（你要填）/ `EXPORT`（返回值）/ `TABLES`（可进可出）
-- `length`：字符长度（CHAR/NUM/DATE 等）
-- `optional`：是否可省略
-- `description`：参数说明
-- `fields`：若为 STRUCTURE/TABLE，列出嵌套字段
+Returns **all parameters** of the function; each parameter has:
+- `name`: parameter name (**always use this exact uppercase name when passing it**)
+- `type`: `CHAR` / `INT` / `STRUCTURE` / `TABLE` / `BCD` / `DATE` ...
+- `direction`: `IMPORT` (you fill) / `EXPORT` (return value) / `TABLES` (in or out)
+- `length`: character length (for CHAR/NUM/DATE etc.)
+- `optional`: whether it can be omitted
+- `description`: parameter description
+- `fields`: for STRUCTURE/TABLE, lists the nested fields
 
-### 3. 查函数文档
+### 3. Read function documentation
 
 ```bash
 curl 'http://127.0.0.1:3000/api/functions/BAPI_USER_GETLIST/doc?lang=EN'
 ```
 
-返回 `short_text`（短说明）、`long_text`（SE37 完整文档，可能很长）、`parameter_docs`（各参数描述）。`lang` 不传则用 `SAP_LANG` 环境变量（默认 EN）。
+Returns `short_text` (short description), `long_text` (full SE37 documentation, may be long), and `parameter_docs` (per-parameter descriptions). If `lang` is omitted, the `SAP_LANG` environment variable is used (default EN).
 
-> 不是所有函数都有长文档。`long_text` 为空属正常，看 `parameter_docs` 即可。
+> Not all functions have long documentation. An empty `long_text` is normal — read `parameter_docs` instead.
 
-### 4. 查 DDIC 表/结构字段
+### 4. Inspect DDIC table/structure fields
 
 ```bash
 curl http://127.0.0.1:3000/api/ddic/type/BAPIRET2
 ```
 
-返回该 DDIC 对象的全部字段定义。⚠️ 对**结构**（如 `BAPIRET2`）普遍可用；对**透明表**（如 `MARA`）取决于目标系统 DDIC 配置，部分系统会返回 `NOT_FOUND`。
+Returns all field definitions of the DDIC object. ⚠️ Widely available for **structures** (e.g. `BAPIRET2`); for **transparent tables** (e.g. `MARA`) it depends on the target system's DDIC configuration — some systems return `NOT_FOUND`.
 
-### 5. 查字段语义（数据元素/域/合法取值）
+### 5. Inspect field semantics (data element / domain / valid values)
 
 ```bash
 curl 'http://127.0.0.1:3000/api/ddic/field/BAPIRET2/TYPE?lang=EN'
 ```
 
-返回 `data_element`（数据元素）、`domain`（域）、`description`、`fixed_values`（域的固定值，对状态码/类型字段特别有用——告诉你这个字段能填哪些合法值）。
+Returns `data_element` (data element), `domain` (domain), `description`, and `fixed_values` (the domain's fixed values — especially useful for status code / type fields, telling you which values are legal).
 
-### 6. 调用 SAP 函数
+### 6. Invoke an SAP function
 
 ```bash
 curl -X POST http://127.0.0.1:3000/api/rfc \
@@ -118,56 +120,56 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
   }'
 ```
 
-请求体字段：
-- `func_name`：**必填**，函数名（大写）
-- `inputs`：IMPORT 标量参数 → 值。字符串直接传，整数直接传数字
-- `table_inputs`：TABLES 输入参数 → 行数组（每行是 `{字段: 值}`）
-- `struct_inputs`：顶层 IMPORT 结构体参数 → `{字段: 值}`
-- `string_outputs`：要读的 EXPORT 字符串参数 → 最大长度（`null` 表示自动发现）
-- `int_outputs`：要读的 EXPORT 整型参数名数组
-- `auto_outputs`：要按元数据真实类型读的 EXPORT 标量参数名（INT→整数、FLOAT→浮点、INT8→i64、BCD→字符串、BYTE/XSTRING→Base64）
-- `table_outputs`：要遍历的 EXPORT 表 → 字段列表。字段项 `{"name":"FIELD"}` 或 `{"name":"FIELD","max_len":12}`；加 `"auto":true` 让该字段按真实类型读（INT→整数、FLOAT→浮点、INT8→i64、BYTE/XSTRING→Base64、其余→字符串）
-- `struct_outputs`：顶层结构体输出 → 字段列表（规则同 `table_outputs`）
-- `read_return`：是否自动读 BAPI 的 RETURN 消息表
-- `timeout_secs`：本次调用超时秒数（可选，≥1）。不传用全局默认 60s；慢接口（批量 BAPI、大表查询）可自主放宽。超时返回 504
+Request body fields:
+- `func_name`: **required**, function name (uppercase)
+- `inputs`: IMPORT scalar parameters → value. Pass strings directly, integers as numbers
+- `table_inputs`: TABLES input parameters → array of rows (each row is `{field: value}`)
+- `struct_inputs`: top-level IMPORT structure parameters → `{field: value}`
+- `string_outputs`: EXPORT string parameters to read → max length (`null` means auto-discover)
+- `int_outputs`: array of EXPORT integer parameter names to read
+- `auto_outputs`: EXPORT scalar parameter names to read by their true metadata type (INT→integer, FLOAT→float, INT8→i64, BCD→string, BYTE/XSTRING→Base64)
+- `table_outputs`: EXPORT tables to traverse → field list. Field item `{"name":"FIELD"}` or `{"name":"FIELD","max_len":12}`; add `"auto":true` to read that field by its true type (INT→integer, FLOAT→float, INT8→i64, BYTE/XSTRING→Base64, others→string)
+- `struct_outputs`: top-level structure outputs → field list (same rules as `table_outputs`)
+- `read_return`: whether to automatically read the BAPI's RETURN message table
+- `timeout_secs`: timeout in seconds for this call (optional, ≥1). Omit to use the global default of 60s; relax it for slow endpoints (batch BAPIs, large table queries). On timeout returns 504
 
-响应体：
-- `scalars`：标量输出（参数名 → 值，值类型由读取方式决定）
-- `tables`：表输出（表名 → 行数组，每行 `{字段: 值}`）。默认字段值为字符串；`auto:true` 的字段按真实类型返回（整数/浮点/Base64 字符串）
-- `structs`：顶层结构体输出（同 `tables` 的值类型规则）
-- `return_table`：RETURN 消息（若有，字段统一为字符串）
+Response body:
+- `scalars`: scalar outputs (parameter name → value; value type depends on the read method)
+- `tables`: table outputs (table name → array of rows, each row `{field: value}`). Field values are strings by default; fields with `auto:true` are returned by their true type (integer/float/Base64 string)
+- `structs`: top-level structure outputs (same value-type rules as `tables`)
+- `return_table`: RETURN messages (if any; fields uniformly strings)
 
-> ⚠️ **表/结构输出默认按字符串读**。需要保留数值语义时，给字段加 `"auto":true`，服务端按 DDIC 真实类型（INT/FLOAT/INT8/BYTE）选择对应 getter。
+> ⚠️ **Table/structure outputs are read as strings by default.** To preserve numeric semantics, add `"auto":true` to the field; the server then selects the appropriate getter by the DDIC true type (INT/FLOAT/INT8/BYTE).
 
-## 关键约束（避坑）
+## Key constraints (pitfalls to avoid)
 
-1. **参数名必须大写**：SAP 参数名区分大小写，JSON 里永远用大写（如 `USERNAME` 不是 `username`）。
-2. **先查接口再调用**：参数名/类型不要猜，先用端点 2 查准。
-3. **CHAR 类型传字符串，INT 传数字**：`{"REQUTEXT":"hi"}`、`{"MAX_ROWS":100}`。
-4. **BCD/INT8/二进制**用显式类型标记：`{"type":"BCD","value":"123.45"}`、`{"type":"BYTES","value":"<base64>"}`。
-5. **BAPI 要显式提交事务**：写操作的 BAPI（CREATE/UPDATE/DELETE）成功后需调 `BAPI_TRANSACTION_COMMIT`，否则改动不生效。
-6. **错误看 RETURN**：BAPI 通常不报 HTTP 错，而是返回 `RETURN` 表里带 `TYPE=E`（错误）的行。`read_return: true` 能自动带出。
-7. **HTTP 状态码有语义**：4xx（400/401/403/404/405/429）多为调用方问题，5xx（500/502/504）多为 SAP 系统或网络问题。响应体 `error.code`=HTTP 状态码、`error.key`=机器码（如 `FU_NOT_FOUND`/`AUTH_INVALID`/`RATE_LIMITED`），按二者精确分支。
-8. **透明表查询受限**：端点 4/5 对 DDIC 结构普遍可用，透明表（如 MARA）视系统配置可能 `NOT_FOUND`。
-9. **调用有超时**：单次 SAP 调用默认 60s 超时（`SAP_REQUEST_TIMEOUT_SECS` 可配），超时返回 `504`。`/api/rfc` 可在请求体传 `timeout_secs` per-request 覆盖（慢接口如批量 BAPI、大表查询可放宽）。
-10. **限流**：设了 `SAP_RATE_LIMIT_RPS` 时，`/api` 按调用方 IP 限速；超限返回 `429`（`key=RATE_LIMITED`）。默认不限流。
+1. **Parameter names must be uppercase**: SAP parameter names are case-sensitive; in JSON always use uppercase (e.g. `USERNAME`, not `username`).
+2. **Inspect the interface before invoking**: don't guess parameter names/types — confirm them with endpoint 2 first.
+3. **Pass strings for CHAR, numbers for INT**: `{"REQUTEXT":"hi"}`, `{"MAX_ROWS":100}`.
+4. **Use explicit type markers for BCD/INT8/binary**: `{"type":"BCD","value":"123.45"}`, `{"type":"BYTES","value":"<base64>"}`.
+5. **Commit transactions explicitly for BAPIs**: after a write BAPI (CREATE/UPDATE/DELETE) succeeds, you must call `BAPI_TRANSACTION_COMMIT`, otherwise the changes do not take effect.
+6. **Check RETURN for errors**: BAPIs usually do not raise HTTP errors; instead they return rows with `TYPE=E` (error) in the `RETURN` table. `read_return: true` brings it out automatically.
+7. **HTTP status codes are semantic**: 4xx (400/401/403/404/405/429) are mostly caller-side problems; 5xx (500/502/504) are mostly SAP system or network problems. The response body's `error.code` = HTTP status code, `error.key` = machine code (e.g. `FU_NOT_FOUND` / `AUTH_INVALID` / `RATE_LIMITED`); branch precisely on both.
+8. **Transparent table queries are limited**: endpoints 4/5 are generally available for DDIC structures; transparent tables (e.g. MARA) may return `NOT_FOUND` depending on system configuration.
+9. **Calls have timeouts**: a single SAP call times out after 60s by default (configurable via `SAP_REQUEST_TIMEOUT_SECS`); timeout returns `504`. `/api/rfc` accepts a per-request `timeout_secs` in the body to override it (relax it for slow endpoints like batch BAPIs or large table queries).
+10. **Rate limiting**: when `SAP_RATE_LIMIT_RPS` is set, `/api` is rate-limited per caller IP; exceeding the limit returns `429` (`key=RATE_LIMITED`). No rate limit by default.
 
-## 典型任务示例
+## Typical task example
 
-**任务：列出 SAP 系统里的用户**
+**Task: list users in the SAP system**
 
 ```bash
-# 1. 搜相关函数
+# 1. Search for the relevant function
 curl -X POST http://127.0.0.1:3000/api/functions/search \
   -H "Content-Type: application/json" \
   -d '{"pattern":"BAPI_USER_GETLIST"}'
-# → 确认 BAPI_USER_GETLIST 存在
+# → Confirm BAPI_USER_GETLIST exists
 
-# 2. 查接口，看返回表叫什么、有哪些字段
+# 2. Inspect the interface; see what the return table is called and its fields
 curl http://127.0.0.1:3000/api/functions/BAPI_USER_GETLIST
-# → 发现 EXPORT 表 USERLIST，含 USERNAME 等字段
+# → Find the EXPORT table USERLIST, with fields like USERNAME
 
-# 3. 调用，读 USERLIST 表
+# 3. Invoke, reading the USERLIST table
 curl -X POST http://127.0.0.1:3000/api/rfc \
   -H "Content-Type: application/json" \
   -d '{
@@ -177,18 +179,18 @@ curl -X POST http://127.0.0.1:3000/api/rfc \
   }'
 ```
 
-## 健康检查
+## Health checks
 
-两个探针语义不同：
+The two probes have different semantics:
 
-- `GET /health` —— liveness，**不触碰 SAP**，秒回 `{"status":"ok"}`，判断进程是否存活。
-- `GET /ready` —— readiness，借连接池调 `RFC_PING`（5s 超时）验证 SAP 可达；成功 `{"status":"ready","sap":"ok"}`，失败/超时返回 `503`。
-- `GET /metrics` —— Prometheus 指标（免鉴权）：连接池 idle/total/max、RFC 调用计数/耗时。供采集系统抓取。
+- `GET /health` — liveness, **does not touch SAP**, returns `{"status":"ok"}` instantly; indicates whether the process is alive.
+- `GET /ready` — readiness, uses the connection pool to call `RFC_PING` (5s timeout) to verify SAP reachability; on success `{"status":"ready","sap":"ok"}`, on failure/timeout returns `503`.
+- `GET /metrics` — Prometheus metrics (unauthenticated): connection pool idle/total/max, RFC call counts/latency. For scraping by collection systems.
 
 ```bash
 curl http://127.0.0.1:3000/health
-# → {"status":"ok"}   （不触碰 SAP，仅探活）
+# → {"status":"ok"}   (does not touch SAP; liveness only)
 
 curl http://127.0.0.1:3000/ready
-# → {"status":"ready","sap":"ok"}   （连 SAP 跑 RFC_PING；失败返回 503）
+# → {"status":"ready","sap":"ok"}   (connects to SAP and runs RFC_PING; returns 503 on failure)
 ```

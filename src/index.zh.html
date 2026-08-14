@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en" class="light">
+<html lang="zh-CN" class="light">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>rust-sap-rfc · SAP NWRFC REST Gateway</title>
+<title>rust-sap-rfc · SAP NWRFC REST 网关</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Space+Grotesk:wght@600;700&family=Geist:wght@400&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
@@ -36,6 +36,7 @@ tailwind.config = {
                 "on-tertiary-fixed-variant": "#3f465c",
                 "on-tertiary-container": "#343c50",
                 "surface-tint": "#00687a",
+                "on-primary-container": "#00424f",
                 "on-surface-variant": "#3d494c",
                 "on-primary-fixed": "#001f26",
                 "secondary-container": "#9c48ea",
@@ -104,20 +105,20 @@ tailwind.config = {
 }
 </script>
 <style>
-    /* Blueprint grid background: engineering-style fine grid */
+    /* 蓝图网格背景：工程感细网格 */
     .blueprint-bg {
         background-image:
             linear-gradient(to right, rgba(109, 121, 125, 0.06) 1px, transparent 1px),
             linear-gradient(to bottom, rgba(109, 121, 125, 0.06) 1px, transparent 1px);
         background-size: 24px 24px;
     }
-    /* Mesh gradient glow: cyan/purple light spots */
+    /* mesh 渐变光晕：青/紫两色光斑 */
     .mesh-gradient {
         background:
             radial-gradient(circle at 15% 10%, rgba(6, 182, 212, 0.10) 0%, transparent 40%),
             radial-gradient(circle at 85% 90%, rgba(156, 72, 234, 0.10) 0%, transparent 40%);
     }
-    /* Glassmorphism card */
+    /* 毛玻璃卡片 */
     .bento-card {
         background: rgba(255, 255, 255, 0.8);
         backdrop-filter: blur(16px);
@@ -129,7 +130,7 @@ tailwind.config = {
     }
     .bento-card:hover { border-color: #00687a; }
     .bento-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 24px; }
-    /* Method tags: cyan (GET) / purple (POST) */
+    /* method 标签：青(GET)/紫(POST) */
     .method-get { background: rgba(6, 182, 212, 0.1); color: #06b6d4; border: 1px solid #06b6d4; }
     .method-post { background: rgba(129, 39, 207, 0.1); color: #8127cf; border: 1px solid #8127cf; }
     .material-symbols-outlined { font-family: 'Material Symbols Outlined'; font-weight: normal; font-style: normal; line-height: 1; letter-spacing: normal; text-transform: none; display: inline-block; white-space: nowrap; word-wrap: normal; direction: ltr; -webkit-font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased; }
@@ -151,13 +152,13 @@ tailwind.config = {
         </div>
         <div class="flex items-center gap-md">
             <div class="flex items-center gap-xs text-code-sm font-code-sm">
-                <a href="/?lang=en" class="text-primary font-bold">English</a>
+                <a href="/?lang=en" class="text-on-surface-variant hover:text-primary transition-colors">English</a>
                 <span class="text-on-surface-variant/50">/</span>
-                <a href="/?lang=zh" class="text-on-surface-variant hover:text-primary transition-colors">中文</a>
+                <a href="/?lang=zh" class="text-primary font-bold">中文</a>
             </div>
-            <div class="flex items-center gap-xs px-sm py-xs bg-surface-container-high rounded-full" title="Probes /ready periodically">
+            <div class="flex items-center gap-xs px-sm py-xs bg-surface-container-high rounded-full" title="定期探活 /ready">
                 <span id="status-dot" class="w-2 h-2 rounded-full bg-surface-container-highest"></span>
-                <span id="status-text" class="font-code-sm text-code-sm text-on-surface-variant">Checking…</span>
+                <span id="status-text" class="font-code-sm text-code-sm text-on-surface-variant">检测中…</span>
             </div>
         </div>
     </div>
@@ -169,18 +170,18 @@ tailwind.config = {
     <!-- Hero Section -->
     <section class="mb-xl py-xl">
         <h1 class="font-display-lg text-display-lg text-on-surface mb-sm">rust-sap-rfc</h1>
-        <p class="font-headline-md text-headline-md text-primary mb-md">SAP NWRFC → REST Gateway</p>
+        <p class="font-headline-md text-headline-md text-primary mb-md">SAP NWRFC → REST 网关服务</p>
         <p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl">
-            One endpoint invokes any BAPI; 8 metadata endpoints let AI explore autonomously
+            一个端点调用任意 BAPI，8 个元数据端点供 AI 自主探索
         </p>
     </section>
 
-    <!-- Auth banner: shown only when SAP_API_KEY is set (display injected by backend) -->
+    <!-- 认证提示：仅 SAP_API_KEY 设置时显示（后端注入 display） -->
     <div class="mb-gutter p-md rounded-xl border flex items-center gap-md" style="display:{{AUTH_BANNER_VISIBILITY}};background:rgba(129,39,207,0.06);border-color:#8127cf">
         <span class="material-symbols-outlined" style="color:#8127cf" aria-hidden="true">lock</span>
         <div>
-            <div class="font-body-md text-body-md font-semibold" style="color:#6900b3">API authentication is enabled on this service</div>
-            <div class="font-body-sm text-body-sm" style="color:#8127cf">Calling <code class="font-code-sm">/api</code> endpoints requires an <code class="font-code-sm">Authorization: Bearer &lt;token&gt;</code> request header</div>
+            <div class="font-body-md text-body-md font-semibold" style="color:#6900b3">本服务已启用 API 认证</div>
+            <div class="font-body-sm text-body-sm" style="color:#8127cf">调用 <code class="font-code-sm">/api</code> 端点需在请求头携带 <code class="font-code-sm">Authorization: Bearer &lt;token&gt;</code></div>
         </div>
     </div>
 
@@ -193,19 +194,19 @@ tailwind.config = {
             </div>
             <h2 class="font-headline-md text-headline-md text-on-surface mb-md flex items-center gap-sm">
                 <span class="material-symbols-outlined text-secondary" aria-hidden="true">smart_toy</span>
-                For AI / Agents?
+                给 AI / Agent 用？
             </h2>
             <p class="font-body-md text-body-md text-on-surface-variant mb-lg">
-                Paste this link directly to Claude / GPT or other agents — they can autonomously search functions, inspect parameters, and invoke SAP:
+                把这个链接直接粘贴给 Claude / GPT 等 Agent，它就能自主搜索函数、查参数、调 SAP：
             </p>
             <div class="flex items-center gap-sm bg-surface p-sm rounded-lg border border-outline-variant/40 mb-sm">
                 <code id="agent-link" class="font-code-md text-code-md text-primary flex-grow select-all">{{AGENTS_URL}}</code>
                 <button onclick="copyLink(this)" class="px-md py-xs bg-primary text-on-primary rounded-lg hover:bg-primary-container transition-colors font-body-sm text-body-sm flex items-center gap-xs">
-                    <span class="material-symbols-outlined text-[16px]" aria-hidden="true">content_copy</span> Copy
+                    <span class="material-symbols-outlined text-[16px]" aria-hidden="true">content_copy</span> 复制
                 </button>
             </div>
             <p class="font-body-sm text-body-sm text-on-surface-variant italic">
-                Once the agent reads this doc, it knows which endpoints exist, how to call them, and the workflow
+                Agent 读取这份文档后，就知道有哪些端点、怎么调、操作流程
             </p>
         </div>
 
@@ -213,7 +214,7 @@ tailwind.config = {
         <div class="bento-card col-span-12 md:col-span-4">
             <h3 class="font-headline-sm text-headline-sm text-on-surface mb-md flex items-center gap-sm">
                 <span class="material-symbols-outlined text-primary" aria-hidden="true">terminal</span>
-                Connectivity Test
+                连通测试
             </h3>
             <div class="rounded-lg p-md overflow-x-auto" style="background:#191c1e">
 <pre class="font-code-sm text-code-sm whitespace-pre-wrap" style="color:#e6edf3"><code>curl -X POST {{BASE_URL}}/api/rfc \
@@ -221,7 +222,7 @@ tailwind.config = {
   -d '{"func_name":"STFC_CONNECTION","inputs":{"REQUTEXT":"hi"},"string_outputs":{"ECHOTEXT":255,"RESPTEXT":255}}'</code></pre>
             </div>
             <p class="font-body-sm text-body-sm text-on-surface-variant italic mt-sm">
-                Returns ECHOTEXT echoing the input, and RESPTEXT with SAP system info
+                返回 ECHOTEXT 回显输入、RESPTEXT 带 SAP 系统信息
             </p>
         </div>
 
@@ -229,48 +230,48 @@ tailwind.config = {
         <div id="endpoints" class="bento-card col-span-12 md:col-span-6">
             <h3 class="font-headline-sm text-headline-sm text-on-surface mb-md flex items-center gap-sm">
                 <span class="material-symbols-outlined text-secondary" aria-hidden="true">memory</span>
-                AI-facing Metadata API
+                面向 AI 的元数据 API
             </h3>
             <ul class="space-y-sm">
                 <li class="flex items-center gap-md py-sm border-b border-outline-variant/30 last:border-0">
                     <span class="font-code-sm text-code-sm px-sm py-xs rounded method-get w-16 text-center">GET</span>
                     <code class="font-code-sm text-code-sm text-on-surface flex-grow">/api/functions/{name}</code>
-                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">Inspect interface</span>
+                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">查函数接口</span>
                 </li>
                 <li class="flex items-center gap-md py-sm border-b border-outline-variant/30 last:border-0">
                     <span class="font-code-sm text-code-sm px-sm py-xs rounded method-post w-16 text-center">POST</span>
                     <code class="font-code-sm text-code-sm text-on-surface flex-grow">/api/functions/search</code>
-                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">Search function modules</span>
+                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">搜索函数模块</span>
                 </li>
                 <li class="flex items-center gap-md py-sm border-b border-outline-variant/30 last:border-0">
                     <span class="font-code-sm text-code-sm px-sm py-xs rounded method-get w-16 text-center">GET</span>
                     <code class="font-code-sm text-code-sm text-on-surface flex-grow">/api/functions/{name}/doc</code>
-                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">Read function docs</span>
+                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">查函数文档</span>
                 </li>
                 <li class="flex items-center gap-md py-sm border-b border-outline-variant/30 last:border-0">
                     <span class="font-code-sm text-code-sm px-sm py-xs rounded method-get w-16 text-center">GET</span>
                     <code class="font-code-sm text-code-sm text-on-surface flex-grow">/api/functions/{name}/source</code>
-                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">Read function source</span>
+                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">读函数源码</span>
                 </li>
                 <li class="flex items-center gap-md py-sm border-b border-outline-variant/30 last:border-0">
                     <span class="font-code-sm text-code-sm px-sm py-xs rounded method-get w-16 text-center">GET</span>
                     <code class="font-code-sm text-code-sm text-on-surface flex-grow">/api/programs/{name}/source</code>
-                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">Read program source</span>
+                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">读程序源码</span>
                 </li>
                 <li class="flex items-center gap-md py-sm border-b border-outline-variant/30 last:border-0">
                     <span class="font-code-sm text-code-sm px-sm py-xs rounded method-post w-16 text-center">POST</span>
                     <code class="font-code-sm text-code-sm text-on-surface flex-grow">/api/table/read</code>
-                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">Read transparent table</span>
+                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">读透明表数据</span>
                 </li>
                 <li class="flex items-center gap-md py-sm border-b border-outline-variant/30 last:border-0">
                     <span class="font-code-sm text-code-sm px-sm py-xs rounded method-get w-16 text-center">GET</span>
                     <code class="font-code-sm text-code-sm text-on-surface flex-grow">/api/ddic/type/{name}</code>
-                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">Inspect DDIC structure</span>
+                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">查 DDIC 结构</span>
                 </li>
                 <li class="flex items-center gap-md py-sm border-b border-outline-variant/30 last:border-0">
                     <span class="font-code-sm text-code-sm px-sm py-xs rounded method-get w-16 text-center">GET</span>
                     <code class="font-code-sm text-code-sm text-on-surface flex-grow">/api/ddic/field/{table}/{field}</code>
-                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">Inspect field semantics</span>
+                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">查字段语义</span>
                 </li>
             </ul>
         </div>
@@ -281,22 +282,22 @@ tailwind.config = {
             <div class="bento-card flex-grow">
                 <h3 class="font-headline-sm text-headline-sm text-on-surface mb-md flex items-center gap-sm">
                     <span class="material-symbols-outlined text-primary" aria-hidden="true">api</span>
-                    General Invocation
+                    通用调用
                 </h3>
                 <div class="flex items-center gap-md py-sm">
                     <span class="font-code-sm text-code-sm px-sm py-xs rounded method-post w-16 text-center">POST</span>
                     <code class="font-code-sm text-code-sm text-on-surface flex-grow">/api/rfc</code>
-                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">General RFC invocation</span>
+                    <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">通用 RFC 调用</span>
                 </div>
                 <p class="font-body-sm text-body-sm text-on-surface-variant italic mt-sm">
-                    Supports per-request timeout override via <code class="font-code-sm">timeout_secs</code> in the body
+                    支持请求体 <code class="font-code-sm">timeout_secs</code> per-request 覆盖超时
                 </p>
             </div>
             <!-- Other Endpoints -->
             <div class="bento-card flex-grow">
                 <h3 class="font-headline-sm text-headline-sm text-on-surface mb-md flex items-center gap-sm">
                     <span class="material-symbols-outlined text-outline" aria-hidden="true">list</span>
-                    Other Endpoints
+                    其他端点
                 </h3>
                 <div class="flex flex-wrap gap-sm">
                     <code class="font-code-sm text-code-sm bg-surface-container-high px-sm py-xs rounded text-on-surface border border-outline-variant/40">/</code>
@@ -305,7 +306,7 @@ tailwind.config = {
                     <code class="font-code-sm text-code-sm bg-surface-container-high px-sm py-xs rounded text-on-surface border border-outline-variant/40">/ready</code>
                 </div>
                 <p class="font-body-sm text-body-sm text-on-surface-variant italic mt-sm">
-                    /health is a liveness probe (doesn't touch SAP); /ready is a readiness probe (calls RFC_PING)
+                    /health 为存活探针（不触碰 SAP），/ready 为就绪探针（调 RFC_PING）
                 </p>
             </div>
         </div>
@@ -320,17 +321,17 @@ tailwind.config = {
             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
                 <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
             </svg>
-            Source
+            项目源码
         </a>
-        <a class="font-code-sm text-code-sm text-on-surface-variant hover:text-primary transition-colors" href="https://github.com/Jack-Liang/rust_sap_rfc/issues" target="_blank">Feedback</a>
+        <a class="font-code-sm text-code-sm text-on-surface-variant hover:text-primary transition-colors" href="https://github.com/Jack-Liang/rust_sap_rfc/issues" target="_blank">问题反馈</a>
     </div>
     <div class="font-code-sm text-code-sm text-on-surface-variant">
-        Full docs in <code class="font-code-sm">README.md</code> / <code class="font-code-sm">AGENTS.md</code>
+        完整文档见 <code class="font-code-sm">README.md</code> / <code class="font-code-sm">AGENTS.md</code>
     </div>
 </footer>
 
 <script>
-// Dynamic status indicator: probes /ready to reflect real SAP reachability, refreshed every 30s
+// 动态状态指示：探活 /ready 真实反映 SAP 可达性，每 30s 刷新
 async function refreshStatus() {
     const dot = document.getElementById('status-dot');
     const txt = document.getElementById('status-text');
@@ -342,11 +343,11 @@ async function refreshStatus() {
             txt.textContent = 'System Ready';
         } else {
             dot.className = 'w-2 h-2 rounded-full bg-red-500';
-            txt.textContent = 'SAP unreachable';
+            txt.textContent = 'SAP 不可达';
         }
     } catch (_) {
         dot.className = 'w-2 h-2 rounded-full bg-red-500';
-        txt.textContent = 'Probe failed';
+        txt.textContent = '探针失败';
     }
 }
 refreshStatus();
@@ -356,15 +357,15 @@ function copyLink(btn) {
     const url = document.getElementById('agent-link').textContent.trim();
     navigator.clipboard.writeText(url).then(function() {
         const orig = btn.innerHTML;
-        btn.innerHTML = '<span class="material-symbols-outlined text-[16px]" aria-hidden="true">check</span> Copied';
+        btn.innerHTML = '<span class="material-symbols-outlined text-[16px]" aria-hidden="true">check</span> 已复制';
         setTimeout(function() { btn.innerHTML = orig; }, 2000);
     }).catch(function() {
-        // clipboard API unavailable (e.g. non-HTTPS/non-localhost): fall back to selecting text for Cmd+C
+        // clipboard API 不可用（如非 HTTPS/localhost），降级选中文本让用户 Cmd+C
         const range = document.createRange();
         range.selectNode(document.getElementById('agent-link'));
         window.getSelection().removeAllRanges();
         window.getSelection().addRange(range);
-        btn.textContent = 'Selected — press Cmd/Ctrl+C';
+        btn.textContent = '已选中，按 Cmd/Ctrl+C';
     });
 }
 </script>

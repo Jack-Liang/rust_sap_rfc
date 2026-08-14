@@ -335,7 +335,31 @@ async fn index_handler(req: axum::http::Request<axum::body::Body>) -> axum::resp
     } else {
         "none"
     };
-    let html = include_str!("index.html")
+
+    // 语言选择：?lang=zh → 中文，?lang=<其他> → 英文；未带 lang 时按 Accept-Language
+    // （含 zh 开头 → 中文）；默认英文。与 README/AGENTS 双语策略一致（英文为主）。
+    let lang_param = req.uri().query().and_then(|q| {
+        q.split('&').find_map(|kv| {
+            let (k, v) = kv.split_once('=')?;
+            (k == "lang").then_some(v)
+        })
+    });
+    let prefer_zh = match lang_param {
+        Some("zh") => true,
+        Some(_) => false,
+        None => req
+            .headers()
+            .get(axum::http::header::ACCEPT_LANGUAGE)
+            .and_then(|h| h.to_str().ok())
+            .map(|al| al.split(',').any(|r| r.trim().to_lowercase().starts_with("zh")))
+            .unwrap_or(false),
+    };
+    let template = if prefer_zh {
+        include_str!("index.zh.html")
+    } else {
+        include_str!("index.html")
+    };
+    let html = template
         .replace("{{BASE_URL}}", &base)
         .replace("{{AGENTS_URL}}", &agents_url)
         .replace("{{AUTH_BANNER_VISIBILITY}}", auth_visibility);
