@@ -203,7 +203,7 @@ fn handle_call(func_handle: RFC_FUNCTION_HANDLE) -> Result<(), RfcError> {
         })?;
         map.get(&func_name.to_uppercase())
             .ok_or_else(|| RfcError {
-                code: RFC_NOT_FOUND_ENUM,
+                code: crate::ffi::RFC_NOT_FOUND,
                 message: format!("未注册的函数: {}", func_name),
                 key: String::new(),
                 ..Default::default()
@@ -223,9 +223,6 @@ fn handle_call(func_handle: RFC_FUNCTION_HANDLE) -> Result<(), RfcError> {
     tracing::info!(func = %func_name, "server 调用处理完成");
     Ok(())
 }
-
-/// RFC_NOT_FOUND 的枚举值（= 18，按 RFC_RC 顺序）
-const RFC_NOT_FOUND_ENUM: i32 = 18;
 
 // HandlerEntry 的克隆辅助（Vec<ParamDef> 整体克隆）
 impl HandlerEntry {
@@ -299,6 +296,9 @@ fn write_outputs(
     params: &[ParamDef],
     outputs: &HashMap<String, String>,
 ) -> Result<(), RfcError> {
+    use crate::ffi::rfctype;
+    use base64::Engine as _;
+
     for p in params {
         let is_output = matches!(p.direction.to_lowercase().as_str(), "export" | "changing");
         if !is_output {
@@ -310,15 +310,68 @@ fn write_outputs(
         };
         unsafe {
             let name_uc = str_to_sap_uc(&p.name);
-            let val_uc = str_to_sap_uc(val);
             let mut err = std::mem::zeroed::<RFC_ERROR_INFO>();
-            let rc = RfcSetString(
-                func_handle as *mut c_void,
-                name_uc.as_ptr(),
-                val_uc.as_ptr(),
-                val.chars().count() as i32,
-                &mut err,
-            );
+            // 按 DDIC 类型选对应 setter；webhook 返回的是字符串，数值/二进制需在此转换。
+            // 类型解析失败（配置没写/拼错）或字符串类（CHAR/STRING/NUM/DATE/TIME/BCD）
+            // 统一按字符串回填。长度用 UTF-16 单元数（SAP UC 即 UTF-16），不能用
+            // chars().count()——后者对非 BMP 字符（emoji 等）会少算，导致 SAP 读到截断值。
+            let rc = match p.rfc_type() {
+                Ok(rfctype::INT) | Ok(rfctype::INT2) | Ok(rfctype::INT1) => {
+                    let v: i32 = val.parse().map_err(|e| RfcError {
+                        code: -1,
+                        message: format!("回填参数 {} 的整数值解析失败 (\"{}\"): {}", p.name, val, e),
+                        key: String::new(),
+                        ..Default::default()
+                    })?;
+                    RfcSetInt(func_handle as *mut c_void, name_uc.as_ptr(), v, &mut err)
+                }
+                Ok(rfctype::INT8) => {
+                    let v: i64 = val.parse().map_err(|e| RfcError {
+                        code: -1,
+                        message: format!("回填参数 {} 的 INT8 值解析失败 (\"{}\"): {}", p.name, val, e),
+                        key: String::new(),
+                        ..Default::default()
+                    })?;
+                    RfcSetInt8(func_handle as *mut c_void, name_uc.as_ptr(), v, &mut err)
+                }
+                Ok(rfctype::FLOAT) => {
+                    let v: f64 = val.parse().map_err(|e| RfcError {
+                        code: -1,
+                        message: format!("回填参数 {} 的 FLOAT 值解析失败 (\"{}\"): {}", p.name, val, e),
+                        key: String::new(),
+                        ..Default::default()
+                    })?;
+                    RfcSetFloat(func_handle as *mut c_void, name_uc.as_ptr(), v, &mut err)
+                }
+                Ok(rfctype::BYTE) | Ok(rfctype::XSTRING) => {
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(val.as_bytes())
+                        .map_err(|e| RfcError {
+                            code: -1,
+                            message: format!("回填参数 {} 的 Base64 解码失败 (\"{}\"): {}", p.name, val, e),
+                            key: String::new(),
+                            ..Default::default()
+                        })?;
+                    RfcSetXString(
+                        func_handle as *mut c_void,
+                        name_uc.as_ptr(),
+                        bytes.as_ptr(),
+                        bytes.len() as u32,
+                        &mut err,
+                    )
+                }
+                // CHAR/STRING/NUM/DATE/TIME/BCD 及类型解析失败：按字符串回填
+                _ => {
+                    let val_uc = str_to_sap_uc(val);
+                    RfcSetString(
+                        func_handle as *mut c_void,
+                        name_uc.as_ptr(),
+                        val_uc.as_ptr(),
+                        val.encode_utf16().count() as i32,
+                        &mut err,
+                    )
+                }
+            };
             if rc != RFC_OK {
                 return Err(RfcError {
                     code: rc,

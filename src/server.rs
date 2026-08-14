@@ -111,7 +111,12 @@ where
             key: String::new(),
             ..Default::default()
         })?,
-        Err(_elapsed) => Err(timeout_error(timeout)),
+        Err(_elapsed) => {
+            // 超时：spawn_blocking 任务无法取消（NWRFC 固有限制），它会在 SAP 真正响应后
+            // 自行结束并归还连接。这里只负责及时返回 504；记告警以便运维监控慢调用堆积。
+            tracing::warn!(?timeout, "SAP 调用超时，阻塞任务将在 SAP 响应后自行归还连接");
+            Err(timeout_error(timeout))
+        }
     }
 }
 
@@ -192,7 +197,10 @@ async fn rate_limit_middleware(
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip());
     let Some(ip) = ip else {
-        return next.run(req).await; // 拿不到 IP（不该发生，server 经 ConnectInfo 启动）
+        // 拿不到 ConnectInfo 不该发生（server 经 into_make_service_with_connect_info 启动）。
+        // 容错过放行而非误伤全部请求，但记告警以便发现中间件剥离 ConnectInfo 的情况。
+        tracing::warn!("限流中间件取不到客户端 IP（ConnectInfo 缺失），本次放行");
+        return next.run(req).await;
     };
     if limiter.check_key(&ip).is_ok() {
         next.run(req).await
@@ -411,11 +419,13 @@ async fn invoke_handler(
     let params = summarize_params(&req);
     let pool_stats = pool.stats(); // 采样当前池状态（pool 即将 move 进闭包）
 
-    // per-request 超时：调用方可对慢接口自主放宽；不传/传 0 → 用全局默认
+    // per-request 超时：调用方可对慢接口自主放宽；不传/传 0 → 用全局默认。
+    // clamp 到 [1, MAX_TIMEOUT_SECS]，防止恶意传天文数字超时长期占用连接/阻塞线程。
+    const MAX_TIMEOUT_SECS: u64 = 1800; // 30 分钟上限
     let timeout = req
         .timeout_secs
         .filter(|&s| s >= 1)
-        .map(Duration::from_secs)
+        .map(|s| Duration::from_secs(s.min(MAX_TIMEOUT_SECS)))
         .unwrap_or_else(request_timeout);
     // 通过 with_connection 执行：遇通信错误自动重连重试一次
     let result =
@@ -769,11 +779,9 @@ async fn function_doc_handler(
                 text: p.parameter_text.clone(),
             })
             .collect();
-        // 短文本：从任一参数的描述或元数据取（此处用首个参数描述作 fallback）
-        let short_text = param_infos
-            .first()
-            .map(|p| p.parameter_text.clone())
-            .unwrap_or_default();
+        // 函数级 short_text 无可靠来源（SAP 元数据里只有参数级 parameterText），
+        // 不用首个参数描述冒充函数说明；留空，由 long_text / parameter_docs 提供信息。
+        let short_text = String::new();
         // 读 SE37 长文档（失败降级为空 + warning）
         let doc = crate::discovery::read_function_doc(conn, &name, &lang, &short_text)?;
         Ok(FunctionDocResponse {

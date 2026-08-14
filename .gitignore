@@ -43,3 +43,5 @@ nwrfcsdk/**
 
 # 本地环境变量（含真实凭据，不要提交）
 .env
+# Server 模式配置（servers.toml，可能含 SAP gateway 凭据）；模板 servers.toml.example 保留可提交
+servers.toml

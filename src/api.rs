@@ -312,6 +312,10 @@ pub const MAX_FUNC_NAME_LEN: usize = 30;
 pub const MAX_FIELD_LEN: usize = 1_000_000;
 /// table_inputs 每个表的行数上界，防止单请求耗尽连接池
 pub const MAX_TABLE_ROWS: usize = 100_000;
+/// table_outputs / RETURN 表的输出行数上界：SAP 返回的表可能极大（百万行），
+/// 全量读进内存会 OOM。超过则截断前 MAX_OUTPUT_ROWS 行并告警。
+/// 调用方需要分页应改用 /api/table/read（带 rowcount）。
+pub const MAX_OUTPUT_ROWS: u32 = 10_000;
 
 /// 校验函数名：非空、≤30 字符、仅含 [A-Za-z0-9_]。
 /// 非法返回 400 错误。空/超长/含特殊字符都拒绝，避免传给 FFI 后的未定义行为。
@@ -506,12 +510,12 @@ where
         if scalars.contains_key(name) {
             continue; // 已被 int/string_outputs 读过，跳过
         }
-        let type_ = resolved
+        let (type_, char_len) = resolved
             .scalars
             .get(name)
-            .map(|(_, t)| *t)
-            .unwrap_or(crate::ffi::RFCTYPE_CHAR);
-        let v = read_scalar_by_type(&mut func, name, type_)?;
+            .map(|(l, t)| (*t, *l))
+            .unwrap_or((crate::ffi::RFCTYPE_CHAR, DEFAULT_CHAR_LEN));
+        let v = read_scalar_by_type(&mut func, name, type_, char_len)?;
         scalars.insert(name.clone(), v);
     }
 
@@ -519,19 +523,27 @@ where
     //    false → 字符串（向后兼容），true → 按真实类型（INT/FLOAT/INT8/Base64）
     let mut tables: HashMap<String, Vec<HashMap<String, ScalarValue>>> = HashMap::new();
     for (table_name, fields) in &req.table_outputs {
-        let table = func.get_table(table_name)?;
+        let table = func.get_table(&table_name.to_uppercase())?;
         let count = table.row_count()?;
+        // 输出表可能极大，截断到 MAX_OUTPUT_ROWS 行防 OOM（与 /api/table/read 上限一致）
+        let capped = count.min(MAX_OUTPUT_ROWS);
+        if capped < count {
+            tracing::warn!(
+                table = %table_name, actual = count, capped = MAX_OUTPUT_ROWS,
+                "表输出行数超上限，已截断（需分页请用 /api/table/read）"
+            );
+        }
         let field_metas = resolved.tables.get(table_name);
-        let mut out_rows = Vec::with_capacity(count as usize);
-        for i in 0..count {
+        let mut out_rows = Vec::with_capacity(capped as usize);
+        for i in 0..capped {
             let mut row = table.get_row(i)?;
             let mut m = HashMap::new();
             for field_spec in fields {
                 let v = if field_spec.auto {
-                    let type_ = field_metas
-                        .and_then(|fm| fm.get(&field_spec.name.to_uppercase()).map(|(_, t)| *t))
-                        .unwrap_or(crate::ffi::RFCTYPE_CHAR);
-                    match read_scalar_by_type(&mut row, &field_spec.name, type_) {
+                    let (type_, char_len) = field_metas
+                        .and_then(|fm| fm.get(&field_spec.name.to_uppercase()).map(|(l, t)| (*t, *l)))
+                        .unwrap_or((crate::ffi::RFCTYPE_CHAR, DEFAULT_CHAR_LEN));
+                    match read_scalar_by_type(&mut row, &field_spec.name.to_uppercase(), type_, char_len) {
                         Ok(v) => v,
                         Err(e) => {
                             tracing::warn!(table = %table_name, field = %field_spec.name, error = %e.message, "表字段按类型读取失败，用空串替代");
@@ -546,7 +558,7 @@ where
                                 .and_then(|fm| fm.get(&field_spec.name.to_uppercase()).map(|(l, _)| *l))
                         })
                         .unwrap_or(DEFAULT_CHAR_LEN);
-                    match row.get_chars(&field_spec.name, len) {
+                    match row.get_chars(&field_spec.name.to_uppercase(), len) {
                         Ok(v) => ScalarValue::Chars(v),
                         Err(e) => {
                             tracing::warn!(table = %table_name, field = %field_spec.name, error = %e.message, "表字段读取失败，用空串替代");
@@ -564,7 +576,7 @@ where
     // 5b. 收集顶层结构体输出（同表输出的类型规则）— `structs` 已在函数顶部声明（line ~459），
     //     此处直接向其填充。
     for (struct_name, fields) in &req.struct_outputs {
-        let mut row = match func.get_structure(struct_name) {
+        let mut row = match func.get_structure(&struct_name.to_uppercase()) {
             Ok(r) => r,
             Err(_) => continue, // 该函数无此结构体参数，跳过
         };
@@ -572,10 +584,10 @@ where
         let mut m = HashMap::new();
         for field_spec in fields {
             let v = if field_spec.auto {
-                let type_ = struct_metas
-                    .and_then(|fm| fm.get(&field_spec.name.to_uppercase()).map(|(_, t)| *t))
-                    .unwrap_or(crate::ffi::RFCTYPE_CHAR);
-                match read_scalar_by_type(&mut row, &field_spec.name, type_) {
+                    let (type_, char_len) = struct_metas
+                        .and_then(|fm| fm.get(&field_spec.name.to_uppercase()).map(|(l, t)| (*t, *l)))
+                        .unwrap_or((crate::ffi::RFCTYPE_CHAR, DEFAULT_CHAR_LEN));
+                    match read_scalar_by_type(&mut row, &field_spec.name.to_uppercase(), type_, char_len) {
                     Ok(v) => v,
                     Err(e) => {
                         tracing::warn!(structure = %struct_name, field = %field_spec.name, error = %e.message, "结构体字段按类型读取失败，用空串替代");
@@ -590,7 +602,7 @@ where
                             .and_then(|fm| fm.get(&field_spec.name.to_uppercase()).map(|(l, _)| *l))
                     })
                     .unwrap_or(DEFAULT_CHAR_LEN);
-                match row.get_chars(&field_spec.name, len) {
+                match row.get_chars(&field_spec.name.to_uppercase(), len) {
                     Ok(v) => ScalarValue::Chars(v),
                     Err(e) => {
                         tracing::warn!(structure = %struct_name, field = %field_spec.name, error = %e.message, "结构体字段读取失败，用空串替代");
@@ -626,6 +638,7 @@ fn read_scalar_by_type<R: crate::function::ScalarReader>(
     reader: &mut R,
     name: &str,
     type_: i32,
+    char_len: usize,
 ) -> Result<ScalarValue, RfcError> {
     use crate::ffi::rfctype::*;
     match type_ {
@@ -633,15 +646,15 @@ fn read_scalar_by_type<R: crate::function::ScalarReader>(
         INT2 | INT1 => Ok(ScalarValue::Int(reader.read_int(name)?)), // INT2/INT1 归到 i32
         INT8 => Ok(ScalarValue::Int8(reader.read_int8(name)?)), // INT8 (i64)
         FLOAT => Ok(ScalarValue::Float(reader.read_float(name)?)), // FLOAT (f64)
-        // 二进制（BYTE, XSTRING）：读字节后 Base64
+        // 二进制（BYTE, XSTRING）：读字节后 Base64。char_len 对 BYTE 即字节数，至少 64 防 tiny alloc
         BYTE | XSTRING => {
-            let bytes = reader.read_xstring(name, DEFAULT_CHAR_LEN)?;
+            let bytes = reader.read_xstring(name, char_len.max(64))?;
             let b64 = general_purpose::STANDARD.encode(&bytes);
             Ok(ScalarValue::Chars(b64))
         }
-        // 其余（CHAR/NUM/DATE/TIME/BCD/STRING）：按字符串读，BCD 保留小数位
+        // 其余（CHAR/NUM/DATE/TIME/BCD/STRING）：用 metadata 长度作初始缓冲区，不够时自适应重读
         _ => {
-            let v = reader.read_chars(name, DEFAULT_CHAR_LEN)?;
+            let v = reader.read_chars(name, char_len)?;
             Ok(ScalarValue::Chars(v))
         }
     }
@@ -664,8 +677,10 @@ fn read_return_table(
     if count == 0 {
         return Ok(None);
     }
-    let mut rows = Vec::with_capacity(count as usize);
-    for i in 0..count {
+    // RETURN 表通常很短，但同样加防御性上限防异常情况
+    let capped = count.min(MAX_OUTPUT_ROWS);
+    let mut rows = Vec::with_capacity(capped as usize);
+    for i in 0..capped {
         let row = table.get_row(i)?;
         let mut m = HashMap::new();
         // RETURN 字段读取失败时 log warn，避免空字段掩盖真实 SAP 错误
@@ -1159,7 +1174,7 @@ mod tests {
     #[test]
     fn read_scalar_by_type_int() {
         let mut r = mock_reader();
-        let v = read_scalar_by_type(&mut r, "F", crate::ffi::rfctype::INT).unwrap();
+        let v = read_scalar_by_type(&mut r, "F", crate::ffi::rfctype::INT, 255).unwrap();
         assert!(matches!(v, ScalarValue::Int(42)));
         assert_eq!(r.calls[0].1, "int");
     }
@@ -1167,17 +1182,17 @@ mod tests {
     #[test]
     fn read_scalar_by_type_int2_int1_route_to_int() {
         let mut r = mock_reader();
-        let v = read_scalar_by_type(&mut r, "F", crate::ffi::rfctype::INT2).unwrap();
+        let v = read_scalar_by_type(&mut r, "F", crate::ffi::rfctype::INT2, 255).unwrap();
         assert!(matches!(v, ScalarValue::Int(42)));
         let mut r2 = mock_reader();
-        let v2 = read_scalar_by_type(&mut r2, "F", crate::ffi::rfctype::INT1).unwrap();
+        let v2 = read_scalar_by_type(&mut r2, "F", crate::ffi::rfctype::INT1, 255).unwrap();
         assert!(matches!(v2, ScalarValue::Int(42)));
     }
 
     #[test]
     fn read_scalar_by_type_int8() {
         let mut r = mock_reader();
-        let v = read_scalar_by_type(&mut r, "F", crate::ffi::rfctype::INT8).unwrap();
+        let v = read_scalar_by_type(&mut r, "F", crate::ffi::rfctype::INT8, 255).unwrap();
         assert!(matches!(v, ScalarValue::Int8(9_000_000_000)));
         assert_eq!(r.calls[0].1, "int8");
     }
@@ -1185,7 +1200,7 @@ mod tests {
     #[test]
     fn read_scalar_by_type_float() {
         let mut r = mock_reader();
-        let v = read_scalar_by_type(&mut r, "F", crate::ffi::rfctype::FLOAT).unwrap();
+        let v = read_scalar_by_type(&mut r, "F", crate::ffi::rfctype::FLOAT, 255).unwrap();
         assert!(matches!(v, ScalarValue::Float(f) if (f - 1.5).abs() < 1e-9));
     }
 
@@ -1194,7 +1209,7 @@ mod tests {
         // BYTE(4) 和 XSTRING(30) 都读字节后 Base64 编码
         for ty in [crate::ffi::rfctype::BYTE, crate::ffi::rfctype::XSTRING] {
             let mut r = mock_reader();
-            let v = read_scalar_by_type(&mut r, "F", ty).unwrap();
+            let v = read_scalar_by_type(&mut r, "F", ty, 255).unwrap();
             match v {
                 ScalarValue::Chars(s) => assert_eq!(s, "aGVsbG8="), // "hello" 的 Base64
                 other => panic!("BYTE/XSTRING 应为 Chars(Base64), 实际 {:?}", other),
@@ -1212,7 +1227,7 @@ mod tests {
             crate::ffi::rfctype::STRING,
         ] {
             let mut r = mock_reader();
-            let v = read_scalar_by_type(&mut r, "F", ty).unwrap();
+            let v = read_scalar_by_type(&mut r, "F", ty, 255).unwrap();
             assert!(matches!(v, ScalarValue::Chars(_)), "ty={} 应为 Chars", ty);
         }
     }
