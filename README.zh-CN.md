@@ -572,8 +572,10 @@ src/
 ├── main.rs           启动入口：.env → 按角色(client/server/both)启动对应模式
 ├── config.rs         从环境变量组装 client 模式连接参数 + 监听地址
 ├── server_config.rs  server 模式配置：解析 servers.toml（gateway/函数/webhook）
-├── server.rs         axum Router + handler（run_blocking 收敛 spawn_blocking 模板）
+├── server.rs         axum Router + handler + 鉴权/限流中间件（run_blocking_with_timeout 收敛 spawn_blocking + 超时模板）
+├── auth.rs           /api/* 的可选 Bearer Token 鉴权（SAP_API_KEY，常量时间比对）；探针与文档页始终免鉴权
 ├── server_rfc.rs     server 模式：注册到 Gateway + dispatch 回调 + webhook 转发
+├── adt.rs            ADT REST 代理 /api/adt/**：透传到 /sap/bc/adt/**，Basic 认证 + CSRF token/会话管理（写方法遇 403 自动重试）
 ├── api.rs            请求/响应 DTO（serde）+ execute_invoke 执行核心 + 输入校验
 ├── executor.rs       execute_collect：注入元数据解析后委托 execute_invoke
 ├── connection.rs     RfcConnection：建连/关闭/取函数/拉参数元数据（unsafe impl Send）
@@ -584,7 +586,8 @@ src/
 ├── error.rs          RfcError + 按 SAP RC 映射的语义化 HTTP 状态码 + JSON 错误体
 ├── ffi.rs            底层 C FFI 绑定（sapnwrfc 函数签名 + RFCTYPE/方向常量）
 ├── string_utils.rs   UTF-8 ↔ UTF-16(SAP UC) 转换
-└── index.html        首页 HTML 模板（include_str! 编译期嵌入，{{BASE_URL}} 占位符）
+├── index.html        首页 HTML 模板，英文（include_str! 编译期嵌入，{{BASE_URL}} 占位符）
+└── index.zh.html     首页 HTML 模板，中文（按客户端 Accept-Language: zh 选择）
 ```
 
 ### 8.2 并发模型
@@ -597,23 +600,27 @@ src/
                   └─◀──────── await JoinHandle ◀──────────────────────────────────────────┘
 ```
 
-- **`run_blocking`（`server.rs`）**：把 `spawn_blocking + with_connection + Join 错误映射`收敛到一处，6 个业务 handler 共用
+- **`run_blocking_with_timeout`（`server.rs`）**：把 `spawn_blocking + with_connection + Join 错误映射 + tokio::time::timeout` 收敛到一处，所有 RFC 业务 handler 共用
 - **为什么用 `spawn_blocking`**：SAP 调用是阻塞 FFI，直接在 tokio worker 上跑会卡住整个运行时
 - **连接池（`pool.rs`）**：`RfcConnectionPool` 维护一组可复用连接，空闲时 pop、借出执行、通信类错误（RC=1/2/3/22）丢弃并自动重连。`acquire` 有 120s 总超时上限，池耗尽时不会永久挂起
 - **为什么需要 `unsafe impl Send`**：`RfcConnection` 持裸指针非 Send；在 `Mutex` 串行化保护下（每次 `with_connection` 独占一个连接），NWRFC SDK 允许跨线程串行使用同一连接，故 sound
 - **池大小**：默认 `SAP_POOL_SIZE=8`，可在 `.env` 调整。请求从池里抢空闲连接，未抢到则等待；连接失败时按需自动重连
+- **`/api/adt/**` 路径不走连接池**：完全不碰 RFC FFI 与连接池——纯 async HTTP 透传到 ADT 服务（Basic 认证 + CSRF token/会话管理见 `adt.rs`），与 RFC 端点仅共享鉴权/限流中间件
 
 ### 8.3 升级路径
 
 | 需求 | 状态 / 改造方向 |
 |---|---|
-| 鉴权 | axum 加 `tower-http` 中间件 + API Key 校验 |
+| 鉴权 | ✅ 已实现（可选 `SAP_API_KEY` Bearer 鉴权，常量时间比对，`auth.rs`；探针与文档页始终免鉴权） |
 | 连接池 acquire 超时 | ✅ 已实现（`ACQUIRE_TIMEOUT=120s`，池耗尽时调用方不再永久挂起） |
 | 表/结构体输出按真实类型读 | ✅ 已实现（`FieldSpec.auto=true` 时按 INT/FLOAT/INT8/Base64 读） |
 | HTTP 错误码语义化 | ✅ 已实现（按 SAP RC 映射 400/403/404/500/502/504，见 [§6.1](#61-http-状态码)） |
-| HTTP 输入校验 + DoS 防护 | ✅ 已实现（`validate_func_name` 格式/长度、`max_len` clamp、`table_inputs` 行数上界） |
+| HTTP 输入校验 + DoS 防护 | ✅ 已实现（`validate_func_name` 格式/长度、`max_len` clamp、`table_inputs` 行数上界、`table_outputs`/`read_return` 输出行数上限 10000） |
 | FFI 句柄防御 | ✅ 已实现（OpenConnection/CreateFunction/AppendNewRow 等返回值 null 检查） |
-| 单次 RFC 执行超时 | `tokio::time::timeout` 包 `spawn_blocking`，慢请求不挂死服务 |
+| 命名空间函数 `/NS/NAME` | ✅ 已实现（校验放行 + 通配路由分发，v0.4.10 起） |
+| ADT REST 代理 | ✅ 已实现（`/api/adt/**` 透传 + 写方法 CSRF 自动处理，v0.4.11 起） |
+| 按 IP 限流 | ✅ 已实现（可选 `SAP_RATE_LIMIT_RPS`，governor 键控限流器，超限 429） |
+| 单次 RFC 执行超时 | ✅ 已实现（`run_blocking_with_timeout` 用 `tokio::time::timeout` 包 `spawn_blocking`；默认 60s / `SAP_REQUEST_TIMEOUT_SECS`，单请求 `timeout_secs`，超时 504） |
 | tRFC/qRFC | 暂不支持 |
 
 ---

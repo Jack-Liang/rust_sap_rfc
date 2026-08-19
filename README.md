@@ -571,8 +571,10 @@ src/
 ├── main.rs           Entry point: .env → start the right mode per role (client/server/both)
 ├── config.rs         Assembles client-mode connection parameters + listen address from env vars
 ├── server_config.rs  Server-mode config: parses servers.toml (gateway/functions/webhooks)
-├── server.rs         axum Router + handlers (run_blocking centralizes the spawn_blocking template)
+├── server.rs         axum Router + handlers + auth/rate-limit middleware (run_blocking_with_timeout centralizes the spawn_blocking + timeout template)
+├── auth.rs           Optional Bearer-token auth for /api/* (SAP_API_KEY, constant-time compare); probes & doc pages always open
 ├── server_rfc.rs     Server mode: register with the Gateway + dispatch callbacks + webhook forwarding
+├── adt.rs            ADT REST proxy /api/adt/**: passthrough to /sap/bc/adt/** with Basic auth + CSRF token/session handling (write methods retry once on 403)
 ├── api.rs            Request/response DTOs (serde) + execute_invoke execution core + input validation
 ├── executor.rs       execute_collect: injects metadata resolution then delegates to execute_invoke
 ├── connection.rs     RfcConnection: open/close/fetch function/pull parameter metadata (unsafe impl Send)
@@ -583,7 +585,8 @@ src/
 ├── error.rs          RfcError + semantic HTTP status codes mapped from SAP RC + JSON error body
 ├── ffi.rs            Low-level C FFI bindings (sapnwrfc function signatures + RFCTYPE/direction constants)
 ├── string_utils.rs   UTF-8 ↔ UTF-16 (SAP UC) conversion
-└── index.html        Home-page HTML template (include_str! embedded at compile time, {{BASE_URL}} placeholder)
+├── index.html        Home-page HTML template, English (include_str! embedded at compile time, {{BASE_URL}} placeholder)
+└── index.zh.html     Home-page HTML template, Chinese (selected by the client's Accept-Language: zh)
 ```
 
 ### 8.2 Concurrency model
@@ -596,23 +599,27 @@ src/
                   └─◀──────── await JoinHandle ◀──────────────────────────────────────────────┘
 ```
 
-- **`run_blocking` (`server.rs`)**: folds `spawn_blocking + with_connection + Join error mapping` into one place; shared by the 6 business handlers
+- **`run_blocking_with_timeout` (`server.rs`)**: folds `spawn_blocking + with_connection + Join error mapping + tokio::time::timeout` into one place; shared by all RFC business handlers
 - **Why `spawn_blocking`**: SAP calls are blocking FFI; running them directly on a tokio worker would stall the whole runtime
 - **Connection pool (`pool.rs`)**: `RfcConnectionPool` maintains a set of reusable connections — pop when idle, borrow to execute, and on communication errors (RC=1/2/3/22) drop and auto-reconnect. `acquire` has a 120s total timeout cap, so it never hangs forever when the pool is exhausted
 - **Why `unsafe impl Send` is needed**: `RfcConnection` holds raw pointers and is not Send; under `Mutex` serialization (each `with_connection` exclusively owns one connection), the NWRFC SDK permits the same connection to be used serially across threads, so it's sound
 - **Pool size**: defaults to `SAP_POOL_SIZE=8`, adjustable in `.env`. A request grabs an idle connection from the pool and waits if none is free; on connection failure it auto-reconnects as needed
+- **The `/api/adt/**` path bypasses the pool entirely**: it never touches the RFC FFI or the connection pool — it is a plain async HTTP passthrough to the ADT service (Basic auth + CSRF token/session management in `adt.rs`), sharing only the auth/rate-limit middleware with the RFC endpoints
 
 ### 8.3 Upgrade path
 
 | Need | Status / Direction |
 |---|---|
-| Authentication | axum + `tower-http` middleware + API-key validation |
+| Authentication | ✅ Implemented (optional `SAP_API_KEY` Bearer auth, constant-time compare, `auth.rs`; probes & doc pages always open) |
 | Connection-pool acquire timeout | ✅ Implemented (`ACQUIRE_TIMEOUT=120s`; callers no longer hang forever when the pool is exhausted) |
 | Read table/structure outputs by true type | ✅ Implemented (with `FieldSpec.auto=true`, read as INT/FLOAT/INT8/Base64) |
 | Semantic HTTP error codes | ✅ Implemented (maps SAP RC to 400/403/404/500/502/504; see [§6.1](#61-http-status-codes)) |
-| HTTP input validation + DoS protection | ✅ Implemented (`validate_func_name` format/length, `max_len` clamping, `table_inputs` row-count upper bound) |
+| HTTP input validation + DoS protection | ✅ Implemented (`validate_func_name` format/length, `max_len` clamping, `table_inputs` row-count upper bound, `table_outputs`/`read_return` output row cap of 10,000) |
 | FFI handle defense | ✅ Implemented (null checks on OpenConnection/CreateFunction/AppendNewRow return values) |
-| Per-RFC execution timeout | Wrap `spawn_blocking` with `tokio::time::timeout` so slow requests don't hang the service |
+| Namespaced function modules `/NS/NAME` | ✅ Implemented (validation + wildcard route dispatch, since v0.4.10) |
+| ADT REST proxy | ✅ Implemented (`/api/adt/**` passthrough with automatic CSRF handling, since v0.4.11) |
+| Per-IP rate limiting | ✅ Implemented (optional `SAP_RATE_LIMIT_RPS`, `governor`-keyed limiter, 429 on excess) |
+| Per-RFC execution timeout | ✅ Implemented (`run_blocking_with_timeout` wraps `spawn_blocking` with `tokio::time::timeout`; default 60s / `SAP_REQUEST_TIMEOUT_SECS`, per-request `timeout_secs`, 504 on timeout) |
 | tRFC/qRFC | Not supported yet |
 
 ---
