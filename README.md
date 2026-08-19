@@ -656,3 +656,5 @@ Full details (how it works, SM59 configuration, the webhook protocol, examples) 
 This project is open-sourced under the [MIT License](LICENSE).
 
 > **About the SAP NWRFC SDK**: this project links against SAP's proprietary SDK ([`build.rs`](./build.rs)); its use is governed by your agreement with SAP. The MIT license applies only to the source code in this repository and does not extend to the SDK itself.
+
+> **Trademarks**: This is an independent, community-maintained project. It is not affiliated with, endorsed by, or sponsored by SAP SE. "SAP" and other SAP product names mentioned here are trademarks or registered trademarks of SAP SE, used solely to describe interoperability.

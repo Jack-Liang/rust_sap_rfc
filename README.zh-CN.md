@@ -658,3 +658,5 @@ src/
 本项目基于 [MIT License](LICENSE) 开源。
 
 > **关于 SAP NWRFC SDK**：本项目链接了 SAP 私有 SDK（[`build.rs`](./build.rs)），其使用受你与 SAP 之间的协议约束。MIT 协议仅适用于本仓库源码，不延伸至 SDK 本身。
+
+> **商标声明**：本项目为独立维护的社区项目，与 SAP SE 无隶属、认可或赞助关系。文中提及的 "SAP" 及其他 SAP 产品名称为 SAP SE 的商标或注册商标，仅用于描述互操作性。
