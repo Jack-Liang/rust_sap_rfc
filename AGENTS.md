@@ -8,8 +8,8 @@ This file guides AI/Agents on how to use the rust_sap_rfc service.
 
 rust_sap_rfc is a **SAP NWRFC → REST gateway**: it exposes SAP RFC/BAPI function modules as HTTP endpoints. Through it, you (the AI) can search, inspect, and invoke function modules in an SAP system without installing an SAP client.
 
-- **Project**: https://github.com/Jack-Liang/rust_sap_rfc
-- **Issues**: https://github.com/Jack-Liang/rust_sap_rfc/issues
+- **Project**: https://github.com/Jack-Liang/sap-for-agents
+- **Issues**: https://github.com/Jack-Liang/sap-for-agents/issues
 
 The service listens on `http://127.0.0.1:3000` by default (override with `SAP_LISTEN_ADDR`).
 
