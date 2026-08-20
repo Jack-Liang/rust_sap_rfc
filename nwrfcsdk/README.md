@@ -122,7 +122,7 @@ cargo build
 成功会看到构建提示，例如：
 
 ```
-warning: rust_sap_rfc_demo@0.2.0: 使用 SAP NWRFC SDK: windows-x86_64
+warning: sap_for_agents@0.4.11: 使用 SAP NWRFC SDK: windows-x86_64
     Finished `dev` profile [unoptimized + debuginfo] target(s)
 ```
 
@@ -152,7 +152,7 @@ warning: rust_sap_rfc_demo@0.2.0: 使用 SAP NWRFC SDK: windows-x86_64
 #    （含 libsapnwrfc.so、libsapucum.so）
 
 # 2. 构建镜像（构建期链接 Linux SDK）
-docker build -t rust-sap-rfc .
+docker build -t sap-for-agents .
 
 # 3. 运行时挂载宿主机 SDK 目录
 #    挂载点结构须为：/app/nwrfcsdk/lib/linux-x86_64/libsapnwrfc.so
@@ -163,7 +163,7 @@ docker run --rm -p 3000:3000 \
   -e SAP_CLIENT=100 \
   -e SAP_USER=DEVELOPER \
   -e SAP_PASSWD=secret \
-  rust-sap-rfc
+  sap-for-agents
 ```
 
 宿主机的 `/opt/sap/nwrfcsdk-linux/` 应有 `lib/linux-x86_64/libsapnwrfc.so` 这样的结构（与仓库 `nwrfcsdk/` 一致）。`LD_LIBRARY_PATH` 已在镜像中设好，指向挂载点的子目录。

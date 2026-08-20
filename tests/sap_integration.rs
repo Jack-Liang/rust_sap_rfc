@@ -40,10 +40,10 @@ fn start_server_with_env(extra: &[(&str, &str)]) -> ServerHandle {
     let base_url = format!("http://127.0.0.1:{}", port);
     let listen_addr = format!("127.0.0.1:{}", port);
 
-    // 找到项目根目录的 target/debug/rust_sap_rfc（或用 cargo run）
+    // 找到项目根目录的 target/debug/sap_for_agents（或用 cargo run）
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let bin_debug = format!("{}/target/debug/rust_sap_rfc", manifest_dir);
-    let bin_release = format!("{}/target/release/rust_sap_rfc", manifest_dir);
+    let bin_debug = format!("{}/target/debug/sap_for_agents", manifest_dir);
+    let bin_release = format!("{}/target/release/sap_for_agents", manifest_dir);
 
     let (mut cmd, bin_exists) = if std::path::Path::new(&bin_debug).exists() {
         (Command::new(&bin_debug), true)

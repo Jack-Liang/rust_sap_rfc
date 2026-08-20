@@ -2,11 +2,11 @@
 
 [English](./AGENTS.md) | [简体中文](./AGENTS.zh-CN.md)
 
-This file guides AI/Agents on how to use the rust_sap_rfc service.
+This file guides AI/Agents on how to use the sap-for-agents service.
 
 ## What it is
 
-rust_sap_rfc is a **SAP NWRFC → REST gateway**: it exposes SAP RFC/BAPI function modules as HTTP endpoints. Through it, you (the AI) can search, inspect, and invoke function modules in an SAP system without installing an SAP client.
+sap-for-agents is a **SAP NWRFC → REST gateway**: it exposes SAP RFC/BAPI function modules as HTTP endpoints. Through it, you (the AI) can search, inspect, and invoke function modules in an SAP system without installing an SAP client.
 
 - **Project**: https://github.com/Jack-Liang/sap-for-agents
 - **Issues**: https://github.com/Jack-Liang/sap-for-agents/issues

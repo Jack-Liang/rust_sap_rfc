@@ -1,14 +1,12 @@
 [package]
-name = "rust_sap_rfc_demo"
+name = "sap_for_agents"
 version = "0.4.11"
 license = "MIT"
 edition = "2021"
 repository = "https://github.com/Jack-Liang/sap-for-agents"
 
-# package 名保留历史值（避免改动 Cargo.lock 的依赖树），
-# 但发布产物的二进制名统一为 rust_sap_rfc，不带 demo 后缀。
 [[bin]]
-name = "rust_sap_rfc"
+name = "sap_for_agents"
 path = "src/main.rs"
 
 [dependencies]

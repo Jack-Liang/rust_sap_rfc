@@ -4,7 +4,7 @@
 
 ## 为什么
 
-rust_sap_rfc 网关用 `.env` 里的 `SAP_USER` 连 SAP。**网关能调什么 = 这个账号有什么权限**。
+sap-for-agents 网关用 `.env` 里的 `SAP_USER` 连 SAP。**网关能调什么 = 这个账号有什么权限**。
 
 默认用 `DEVELOPER`（开发账号，权限很宽）= 任何能访问网关的人都能调 `DEVELOPER` 能调的函数（读主数据、改订单、建用户…）。
 

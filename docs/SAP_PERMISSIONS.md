@@ -4,7 +4,7 @@
 
 ## Why It Matters
 
-The rust_sap_rfc gateway connects to SAP using the `SAP_USER` defined in `.env`. **What the gateway can call = the privileges granted to that account.**
+The sap-for-agents gateway connects to SAP using the `SAP_USER` defined in `.env`. **What the gateway can call = the privileges granted to that account.**
 
 By default it uses `DEVELOPER` (a developer account with broad privileges). This means anyone who can reach the gateway can call every function that `DEVELOPER` can invoke—reading master data, changing orders, creating users, and so on.
 

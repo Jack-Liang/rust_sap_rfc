@@ -946,7 +946,7 @@ mod tests {
         let body = body_string(resp.into_body()).await;
         assert!(!body.is_empty());
         // 内容应包含项目名（验证编译期嵌入成功）
-        assert!(body.contains("rust_sap_rfc") || body.contains("SAP"));
+        assert!(body.contains("sap-for-agents") || body.contains("SAP"));
     }
 
     #[tokio::test]

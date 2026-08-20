@@ -2,11 +2,11 @@
 
 [English](./AGENTS.md) | [简体中文](./AGENTS.zh-CN.md)
 
-本文件指导 AI/Agent 如何使用 rust_sap_rfc 服务。
+本文件指导 AI/Agent 如何使用 sap-for-agents 服务。
 
 ## 这是什么
 
-rust_sap_rfc 是一个 **SAP NWRFC → REST 网关**：把 SAP 的 RFC/BAPI 函数暴露为 HTTP 接口。你（AI）通过它能在不安装 SAP 客户端的情况下，搜索、查询、调用 SAP 系统里的函数模块。
+sap_for_agents 是一个 **SAP NWRFC → REST 网关**：把 SAP 的 RFC/BAPI 函数暴露为 HTTP 接口。你（AI）通过它能在不安装 SAP 客户端的情况下，搜索、查询、调用 SAP 系统里的函数模块。
 
 - **项目地址**：https://github.com/Jack-Liang/sap-for-agents
 - **问题反馈**：https://github.com/Jack-Liang/sap-for-agents/issues

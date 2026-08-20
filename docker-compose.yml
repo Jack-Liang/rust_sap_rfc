@@ -1,4 +1,4 @@
-# docker-compose: 一键构建 + 运行 rust-sap-rfc。
+# docker-compose: 一键构建 + 运行 sap-for-agents。
 #
 # 前置：
 #   1. .env 已配置好 SAP_* 连接参数（见 .env.example）
@@ -15,8 +15,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: rust-sap-rfc:latest
-    container_name: sap-rfc
+    image: sap-for-agents:latest
+    container_name: sap-for-agents
     restart: unless-stopped
 
     # SAP 连接参数从 .env 注入（compose 自动加载同目录 .env）

@@ -1,4 +1,4 @@
-# Dockerfile for rust-sap-rfc
+# Dockerfile for sap-for-agents
 #
 # 策略：runtime 镜像 **不含** SAP SDK（避免版权问题，镜像可自由分发）。
 # SDK 在运行时通过卷挂载注入：docker run -v /host/sap-sdk-linux:/app/nwrfcsdk ...
@@ -8,7 +8,7 @@
 #   （含 libsapnwrfc.so 等），build.rs 会据此链接。
 #   详见 nwrfcsdk/README.md。
 #
-# 构建：docker build -t rust-sap-rfc .
+# 构建：docker build -t sap-for-agents .
 # 运行：见下方 EXAMPLE，或 README §9
 
 # ============ 构建阶段 ============
@@ -49,7 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # 只拷贝编译产物，不拷贝 nwrfcsdk/
-COPY --from=builder /app/target/release/rust_sap_rfc /app/rust_sap_rfc
+COPY --from=builder /app/target/release/sap_for_agents /app/sap_for_agents
 
 # 挂载点：宿主机 SAP SDK 在运行时挂到此处
 # 期望目录结构：/app/nwrfcsdk/lib/linux-x86_64/libsapnwrfc.so (+ libsapucum.so)
@@ -73,5 +73,5 @@ EXPOSE 3000
 #     -e SAP_CLIENT=100 \
 #     -e SAP_USER=DEVELOPER \
 #     -e SAP_PASSWD=secret \
-#     rust-sap-rfc
-CMD ["/app/rust_sap_rfc"]
+#     sap-for-agents
+CMD ["/app/sap_for_agents"]

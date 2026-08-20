@@ -16,7 +16,7 @@ ok()   { printf "${GREEN}✓${NC} %s\n" "$1"; }
 warn() { printf "${YELLOW}!${NC} %s\n" "$1"; }
 err()  { printf "${RED}✗${NC} %s\n" "$1"; }
 
-echo "=== rust-sap-rfc 启动检查 ==="
+echo "=== sap-for-agents 启动检查 ==="
 echo ""
 
 # 1. Rust 工具链

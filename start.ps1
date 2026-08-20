@@ -7,7 +7,7 @@ function Write-Ok($msg)   { Write-Host "✓ $msg" -ForegroundColor Green }
 function Write-Warn2($msg){ Write-Host "! $msg" -ForegroundColor Yellow }
 function Write-Err2($msg) { Write-Host "✗ $msg" -ForegroundColor Red }
 
-Write-Host "=== rust-sap-rfc 启动检查 ===" -ForegroundColor Cyan
+Write-Host "=== sap-for-agents 启动检查 ===" -ForegroundColor Cyan
 Write-Host ""
 
 # 1. Rust 工具链

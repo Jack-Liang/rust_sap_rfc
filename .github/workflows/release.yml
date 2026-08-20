@@ -7,11 +7,11 @@ name: Release
 #   git push origin v0.1.0
 #
 # 产物：
-#   rust_sap_rfc-x86_64-pc-windows-msvc.zip
-#   rust_sap_rfc-linux-x86_64.tar.gz
-#   rust_sap_rfc-linux-aarch64.tar.gz
-#   rust_sap_rfc-darwin-x86_64.tar.gz
-#   rust_sap_rfc-darwin-aarch64.tar.gz
+#   sap-for-agents-x86_64-pc-windows-msvc.zip
+#   sap-for-agents-linux-x86_64.tar.gz
+#   sap-for-agents-linux-aarch64.tar.gz
+#   sap-for-agents-darwin-x86_64.tar.gz
+#   sap-for-agents-darwin-aarch64.tar.gz
 #
 # 注意：预编译二进制不包含 SAP NWRFC SDK（受版权限制）。
 # 用户仍需：
@@ -38,7 +38,7 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             archive: tar.gz
-            binary: rust_sap_rfc
+            binary: sap_for_agents
             platform_dir: linux-x86_64
             lib_name: libsapnwrfc.so
             cc: cc
@@ -46,7 +46,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             archive: tar.gz
-            binary: rust_sap_rfc
+            binary: sap_for_agents
             platform_dir: linux-aarch64
             lib_name: libsapnwrfc.so
             cc: aarch64-linux-gnu-gcc
@@ -55,7 +55,7 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-latest
             archive: tar.gz
-            binary: rust_sap_rfc
+            binary: sap_for_agents
             platform_dir: darwin-x86_64
             lib_name: libsapnwrfc.dylib
             cc: cc
@@ -64,7 +64,7 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-latest
             archive: tar.gz
-            binary: rust_sap_rfc
+            binary: sap_for_agents
             platform_dir: darwin-aarch64
             lib_name: libsapnwrfc.dylib
             cc: cc
@@ -75,7 +75,7 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
             archive: zip
-            binary: rust_sap_rfc.exe
+            binary: sap_for_agents.exe
             platform_dir: windows-x86_64
             lib_name: sapnwrfc.lib
             cc: cl
@@ -193,13 +193,13 @@ jobs:
           cd dist
           if [[ "${{ matrix.archive }}" == "zip" ]]; then
             # windows-latest 的 Git Bash 不带 zip 命令，用预装的 7-Zip
-            7z a -tzip ../rust_sap_rfc-${{ matrix.target }}.zip .
+            7z a -tzip ../sap-for-agents-${{ matrix.target }}.zip .
           else
-            tar czf ../rust_sap_rfc-${{ matrix.target }}.tar.gz *
+            tar czf ../sap-for-agents-${{ matrix.target }}.tar.gz *
           fi
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v3
         with:
-          files: rust_sap_rfc-${{ matrix.target }}.${{ matrix.archive }}
+          files: sap-for-agents-${{ matrix.target }}.${{ matrix.archive }}
           generate_release_notes: true

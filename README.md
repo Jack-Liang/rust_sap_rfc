@@ -1,4 +1,4 @@
-# rust-sap-rfc
+# sap-for-agents
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
@@ -71,18 +71,18 @@ Skip Rust; use a ready-made binary:
 
 1. Open [GitHub Releases](../../releases) → pick the latest tag
 2. Download the archive for your platform:
-   - Linux x86_64: `rust_sap_rfc-x86_64-unknown-linux-gnu.tar.gz`
-   - Linux ARM64: `rust_sap_rfc-aarch64-unknown-linux-gnu.tar.gz`
-   - macOS Intel: `rust_sap_rfc-x86_64-apple-darwin.tar.gz`
-   - macOS Apple Silicon: `rust_sap_rfc-aarch64-apple-darwin.tar.gz`
-   - Windows x86_64: `rust_sap_rfc-x86_64-pc-windows-msvc.zip`
-3. Extract it; inside you'll find `rust_sap_rfc` (or `.exe`) + `README.md` + `.env.example` + the `nwrfcsdk/` directory skeleton
+   - Linux x86_64: `sap-for-agents-x86_64-unknown-linux-gnu.tar.gz`
+   - Linux ARM64: `sap-for-agents-aarch64-unknown-linux-gnu.tar.gz`
+   - macOS Intel: `sap-for-agents-x86_64-apple-darwin.tar.gz`
+   - macOS Apple Silicon: `sap-for-agents-aarch64-apple-darwin.tar.gz`
+   - Windows x86_64: `sap-for-agents-x86_64-pc-windows-msvc.zip`
+3. Extract it; inside you'll find `sap_for_agents` (or `.exe`) + `README.md` + `.env.example` + the `nwrfcsdk/` directory skeleton
 4. **Download the SAP NWRFC SDK**: register an account on the [SAP Support Portal](https://launchpad.support.sap.com) (requires SAP customer/partner status), search for `SAP NW RFC SDK`, and download the zip for your platform
 5. **Place the zip into any subdirectory under `nwrfcsdk/lib/`** (e.g. `nwrfcsdk/lib/incoming/`); the startup script auto-extracts it to the correct `<os>-<arch>/` path. **The zip must match your current platform** (macOS→`.dylib`, Linux→`.so`, Windows→`.dll`)
 6. `cp .env.example .env` and fill in the SAP connection parameters
 7. Run:
-   - Linux/macOS: `./rust_sap_rfc`
-   - Windows: double-click `rust_sap_rfc.exe` or launch it from PowerShell
+   - Linux/macOS: `./sap_for_agents`
+   - Windows: double-click `sap_for_agents.exe` or launch it from PowerShell
 
 > **Windows users**: CI now builds a Windows x86_64 binary automatically (a `.def` file generates a stub import library to work around the MSVC linking restriction). After extracting the zip you still need to place `sapnwrfc.dll` yourself; see steps 4–5.
 
